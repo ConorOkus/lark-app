@@ -1,0 +1,36 @@
+name: iosApp
+options:
+  minimumXcodeGenVersion: "2.38.0"
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  iosApp:
+    type: application
+    platform: iOS
+    sources:
+      - iosApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: xyz.lark.app
+        PRODUCT_NAME: lark
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: lark
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        OTHER_LDFLAGS: "$(inherited) -framework ComposeApp"
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../composeApp/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+        # The Kotlin framework only builds iosArm64 + iosSimulatorArm64; add an
+        # iosX64() target in composeApp before removing this exclusion.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+    preBuildScripts:
+      - name: Compile Kotlin Framework
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "${JAVA_HOME:-}" = "" ] && [ -d /opt/homebrew/opt/openjdk@21 ]; then
+            export JAVA_HOME=/opt/homebrew/opt/openjdk@21
+          fi
+          cd "$SRCROOT/.."
+          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
