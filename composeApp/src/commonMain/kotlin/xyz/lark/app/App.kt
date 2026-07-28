@@ -32,6 +32,7 @@ import xyz.lark.app.ui.screens.pay.ScanScreen
 import xyz.lark.app.ui.screens.pay.SendInputScreen
 import xyz.lark.app.ui.screens.pay.SendingScreen
 import xyz.lark.app.ui.screens.pay.SentScreen
+import xyz.lark.app.ui.screens.receive.ReceiveScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
@@ -107,7 +108,7 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
                 onDone = { machine.go(Route.HOME) },
             )
             Route.FAILED -> FailedScreen(onTryAgain = machine::tryAgain, onCancel = { machine.go(Route.HOME) })
-            Route.RECEIVE -> PlaceholderScreen(model.screenLabel)
+            Route.RECEIVE -> ReceiveRoute(model = model, machine = machine)
             Route.SETTINGS -> PlaceholderScreen(model.screenLabel)
             Route.BACKUP -> PlaceholderScreen(model.screenLabel)
             Route.HEALTH -> PlaceholderScreen(model.screenLabel)
@@ -116,6 +117,15 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
         }
     }
 }
+
+/** The RECEIVE branch: binds [ReceiveScreen]'s callbacks to the machine's intents. */
+@Composable
+private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) = ReceiveScreen(
+    receive = model.receive,
+    onBack = machine::back,
+    onCopy = machine::copyCode,
+    onSetAmount = machine::goReceiveAmount,
+)
 
 /** Minimal stand-in until the route's real screen lands (U4–U8). */
 @Composable
