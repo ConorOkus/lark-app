@@ -16,6 +16,11 @@ import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.Route
+import xyz.lark.app.ui.screens.onboarding.BoardingScreen
+import xyz.lark.app.ui.screens.onboarding.FundScreen
+import xyz.lark.app.ui.screens.onboarding.HowItWorksScreen
+import xyz.lark.app.ui.screens.onboarding.RestoreScreen
+import xyz.lark.app.ui.screens.onboarding.WelcomeScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
@@ -50,11 +55,25 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
         contentAlignment = Alignment.Center,
     ) {
         when (model.route) {
-            Route.WELCOME -> PlaceholderScreen(model.screenLabel)
-            Route.HOW_IT_WORKS -> PlaceholderScreen(model.screenLabel)
-            Route.FUND -> PlaceholderScreen(model.screenLabel)
-            Route.BOARDING -> PlaceholderScreen(model.screenLabel)
-            Route.RESTORE -> PlaceholderScreen(model.screenLabel)
+            Route.WELCOME -> WelcomeScreen(
+                onSetUpWallet = machine::goHowItWorks,
+                onRestore = machine::goRestore,
+            )
+            Route.HOW_IT_WORKS -> HowItWorksScreen(
+                onBack = machine::back,
+                onContinue = machine::goFund,
+            )
+            Route.FUND -> FundScreen(
+                onBack = machine::back,
+                onMoveBitcoinIn = machine::startBoarding,
+                onBuyWithCard = machine::startBoarding,
+                onLater = machine::finishOnboarding,
+            )
+            Route.BOARDING -> BoardingScreen(onSkip = machine::finishOnboarding)
+            Route.RESTORE -> RestoreScreen(
+                onBack = machine::back,
+                onRestore = machine::finishRestore,
+            )
             Route.HOME -> PlaceholderScreen(model.screenLabel)
             Route.ACTIVITY -> PlaceholderScreen(model.screenLabel)
             Route.TX_DETAIL -> PlaceholderScreen(model.screenLabel)
