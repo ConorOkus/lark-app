@@ -16,6 +16,10 @@ import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.Route
+import xyz.lark.app.ui.screens.activity.ActivityScreen
+import xyz.lark.app.ui.screens.activity.TxDetailScreen
+import xyz.lark.app.ui.screens.activity.TxTechScreen
+import xyz.lark.app.ui.screens.home.HomeScreen
 import xyz.lark.app.ui.screens.onboarding.BoardingScreen
 import xyz.lark.app.ui.screens.onboarding.FundScreen
 import xyz.lark.app.ui.screens.onboarding.HowItWorksScreen
@@ -74,10 +78,14 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
                 onBack = machine::back,
                 onRestore = machine::finishRestore,
             )
-            Route.HOME -> PlaceholderScreen(model.screenLabel)
-            Route.ACTIVITY -> PlaceholderScreen(model.screenLabel)
-            Route.TX_DETAIL -> PlaceholderScreen(model.screenLabel)
-            Route.TX_TECH -> PlaceholderScreen(model.screenLabel)
+            Route.HOME -> HomeScreen(model = model, machine = machine)
+            Route.ACTIVITY -> ActivityScreen(model = model, machine = machine)
+            Route.TX_DETAIL -> TxDetailScreen(
+                model = model.txDetail,
+                onBack = machine::back,
+                onTechnicalDetails = { machine.push(Route.TX_TECH) },
+            )
+            Route.TX_TECH -> TxTechScreen(onBack = machine::back)
             Route.SEND_INPUT -> PlaceholderScreen(model.screenLabel)
             Route.SCAN -> PlaceholderScreen(model.screenLabel)
             Route.AMOUNT -> PlaceholderScreen(model.screenLabel)
