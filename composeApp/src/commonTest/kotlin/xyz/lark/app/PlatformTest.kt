@@ -9,4 +9,9 @@ class PlatformTest {
     fun platformNameIsNotBlank() {
         assertTrue(platformName().isNotBlank())
     }
+
+    @Test
+    fun platformNameContainsAVersionNumber() {
+        assertTrue(platformName().any(Char::isDigit))
+    }
 }

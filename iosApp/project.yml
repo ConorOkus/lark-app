@@ -29,8 +29,15 @@ targets:
       - name: Compile Kotlin Framework
         basedOnDependencyAnalysis: false
         script: |
-          if [ "${JAVA_HOME:-}" = "" ] && [ -d /opt/homebrew/opt/openjdk@21 ]; then
-            export JAVA_HOME=/opt/homebrew/opt/openjdk@21
+          # Xcode build phases run in a minimal shell: JAVA_HOME is unset unless
+          # inherited from the caller (as in scripts/ci.sh).
+          if [ "${JAVA_HOME:-}" = "" ]; then
+            JAVA_HOME=$(/usr/libexec/java_home -v 21+ 2>/dev/null || echo /opt/homebrew/opt/openjdk@21)
+            export JAVA_HOME
+          fi
+          if [ ! -x "${JAVA_HOME}/bin/java" ]; then
+            echo "error: no JDK found. Set JAVA_HOME or install one, e.g. 'brew install openjdk@21'." >&2
+            exit 1
           fi
           cd "$SRCROOT/.."
           ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
