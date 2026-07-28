@@ -25,6 +25,13 @@ import xyz.lark.app.ui.screens.onboarding.FundScreen
 import xyz.lark.app.ui.screens.onboarding.HowItWorksScreen
 import xyz.lark.app.ui.screens.onboarding.RestoreScreen
 import xyz.lark.app.ui.screens.onboarding.WelcomeScreen
+import xyz.lark.app.ui.screens.pay.AmountScreen
+import xyz.lark.app.ui.screens.pay.FailedScreen
+import xyz.lark.app.ui.screens.pay.ReviewScreen
+import xyz.lark.app.ui.screens.pay.ScanScreen
+import xyz.lark.app.ui.screens.pay.SendInputScreen
+import xyz.lark.app.ui.screens.pay.SendingScreen
+import xyz.lark.app.ui.screens.pay.SentScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
@@ -86,13 +93,20 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
                 onTechnicalDetails = { machine.push(Route.TX_TECH) },
             )
             Route.TX_TECH -> TxTechScreen(onBack = machine::back)
-            Route.SEND_INPUT -> PlaceholderScreen(model.screenLabel)
-            Route.SCAN -> PlaceholderScreen(model.screenLabel)
-            Route.AMOUNT -> PlaceholderScreen(model.screenLabel)
-            Route.REVIEW -> PlaceholderScreen(model.screenLabel)
-            Route.SENDING -> PlaceholderScreen(model.screenLabel)
-            Route.SENT -> PlaceholderScreen(model.screenLabel)
-            Route.FAILED -> PlaceholderScreen(model.screenLabel)
+            Route.SEND_INPUT -> SendInputScreen(model = model, machine = machine)
+            Route.SCAN -> ScanScreen(onClose = machine::back, onScanFound = machine::scanFound)
+            Route.AMOUNT -> AmountScreen(keypad = model.keypad, machine = machine)
+            Route.REVIEW -> ReviewScreen(
+                keypad = model.keypad, send = model.send,
+                onBack = machine::back, onConfirm = machine::confirmSend,
+            )
+            Route.SENDING -> SendingScreen()
+            Route.SENT -> SentScreen(
+                amount = model.keypad.amountDisplay,
+                recipientName = model.send.recipientName,
+                onDone = { machine.go(Route.HOME) },
+            )
+            Route.FAILED -> FailedScreen(onTryAgain = machine::tryAgain, onCancel = { machine.go(Route.HOME) })
             Route.RECEIVE -> PlaceholderScreen(model.screenLabel)
             Route.SETTINGS -> PlaceholderScreen(model.screenLabel)
             Route.BACKUP -> PlaceholderScreen(model.screenLabel)
