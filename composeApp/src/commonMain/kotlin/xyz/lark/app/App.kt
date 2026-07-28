@@ -3,7 +3,6 @@ package xyz.lark.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -11,7 +10,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
@@ -33,6 +31,11 @@ import xyz.lark.app.ui.screens.pay.SendInputScreen
 import xyz.lark.app.ui.screens.pay.SendingScreen
 import xyz.lark.app.ui.screens.pay.SentScreen
 import xyz.lark.app.ui.screens.receive.ReceiveScreen
+import xyz.lark.app.ui.screens.settings.AdvancedScreen
+import xyz.lark.app.ui.screens.settings.BackupScreen
+import xyz.lark.app.ui.screens.settings.ExitScreen
+import xyz.lark.app.ui.screens.settings.HealthScreen
+import xyz.lark.app.ui.screens.settings.SettingsScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
@@ -54,10 +57,11 @@ fun App() {
 }
 
 /**
- * The one place a route becomes a screen. U4–U8 swap each placeholder for the real
- * screen composable; [machine] is already available here for their intents.
+ * The one place a route becomes a screen: one branch per route, each binding a screen
+ * composable to [model] slices and [machine] intents (via `*Route` binders where the
+ * callback wiring would not fit on a branch line).
  */
-@Suppress("CyclomaticComplexMethod", "UnusedParameter") // one branch per route by design
+@Suppress("CyclomaticComplexMethod") // one branch per route by design
 @Composable
 private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
     Box(
@@ -109,11 +113,11 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             )
             Route.FAILED -> FailedScreen(onTryAgain = machine::tryAgain, onCancel = { machine.go(Route.HOME) })
             Route.RECEIVE -> ReceiveRoute(model = model, machine = machine)
-            Route.SETTINGS -> PlaceholderScreen(model.screenLabel)
-            Route.BACKUP -> PlaceholderScreen(model.screenLabel)
-            Route.HEALTH -> PlaceholderScreen(model.screenLabel)
-            Route.ADVANCED -> PlaceholderScreen(model.screenLabel)
-            Route.EXIT -> PlaceholderScreen(model.screenLabel)
+            Route.SETTINGS -> SettingsScreen(model = model, machine = machine)
+            Route.BACKUP -> BackupRoute(model = model, machine = machine)
+            Route.HEALTH -> HealthRoute(model = model, machine = machine)
+            Route.ADVANCED -> AdvancedScreen(model = model, machine = machine)
+            Route.EXIT -> ExitRoute(model = model, machine = machine)
         }
     }
 }
@@ -127,13 +131,28 @@ private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) = ReceiveScr
     onSetAmount = machine::goReceiveAmount,
 )
 
-/** Minimal stand-in until the route's real screen lands (U4–U8). */
+/** The BACKUP branch: binds [BackupScreen]'s callbacks to the machine's intents. */
 @Composable
-private fun PlaceholderScreen(label: String) {
-    Text(
-        text = label,
-        style = LarkTheme.typography.screenTitle,
-        color = LarkTheme.colors.TextPrimary,
-        textAlign = TextAlign.Center,
-    )
-}
+private fun BackupRoute(model: AppModel, machine: AppStateMachine) = BackupScreen(
+    backup = model.backup,
+    onBack = machine::back,
+    onReveal = machine::revealWords,
+    onDone = machine::finishBackup,
+)
+
+/** The HEALTH branch: binds [HealthScreen]'s callbacks to the machine's intents. */
+@Composable
+private fun HealthRoute(model: AppModel, machine: AppStateMachine) = HealthScreen(
+    health = model.health,
+    onBack = machine::back,
+    onRefresh = machine::runRefresh,
+    onDetails = { machine.push(Route.ADVANCED) },
+)
+
+/** The EXIT branch: binds [ExitScreen]'s callbacks to the machine's intents. */
+@Composable
+private fun ExitRoute(model: AppModel, machine: AppStateMachine) = ExitScreen(
+    amount = model.balance.primary,
+    onBack = machine::back,
+    onStart = { machine.go(Route.HOME) },
+)
