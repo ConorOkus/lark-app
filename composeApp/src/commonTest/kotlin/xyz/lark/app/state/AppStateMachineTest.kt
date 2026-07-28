@@ -1,12 +1,22 @@
 package xyz.lark.app.state
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.FakeLarkCore
+import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.model.AdvancedStats
+import xyz.lark.app.core.model.Contact
+import xyz.lark.app.core.model.FiatRate
+import xyz.lark.app.core.model.FundsStats
 import xyz.lark.app.core.model.HealthState
+import xyz.lark.app.core.model.NetworkStats
+import xyz.lark.app.core.model.SendResult
+import xyz.lark.app.core.model.Transaction
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -43,6 +53,16 @@ class AppStateMachineTest {
     fun startsAtHomeWithAWallet() = runTest {
         val m = machine()
         assertEquals(Route.HOME, m.model.value.route)
+    }
+
+    @Test
+    fun emptyActivityCoreConstructsAndRendersWithoutThrowing() = runTest {
+        // The LarkCore contract permits an empty payment history; rendering must be total.
+        val m = AppStateMachine(core = EmptyHistoryCore(), demo = null, scope = backgroundScope)
+        assertEquals(Route.WELCOME, m.model.value.route)
+        m.finishOnboarding()
+        assertEquals(Route.HOME, m.model.value.route)
+        assertEquals("Sent", m.model.value.txDetail.verb) // benign placeholder detail
     }
 
     // --- Navigation stack ---
@@ -409,6 +429,38 @@ class AppStateMachineFlowsTest {
     }
 
     @Test
+    fun backDuringSendingIsANoOpAndTheSendStillLands() = runTest {
+        val m = machine()
+        m.goSendAmount()
+        m.type("520")
+        m.keypadConfirm()
+        m.confirmSend()
+        assertEquals(Route.SENDING, m.model.value.route)
+        assertFalse(m.model.value.canGoBack)
+        m.back() // must not race the in-flight send
+        assertEquals(Route.SENDING, m.model.value.route)
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(Route.SENT, m.model.value.route)
+    }
+
+    @Test
+    fun sentAmountUsesTheConfirmedSnapshotNotLiveDigits() = runTest {
+        val m = machine()
+        m.goSendAmount()
+        m.type("520")
+        m.keypadConfirm()
+        m.confirmSend()
+        m.keyPress('9') // digit changes mid-flight must not alter the sent message
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(Route.SENT, m.model.value.route)
+        assertEquals("₿520", m.model.value.sentAmount)
+        m.keyPress('9') // nor changes after landing
+        assertEquals("₿520", m.model.value.sentAmount)
+    }
+
+    @Test
     fun sentDoneReturnsHome() = runTest {
         val m = machine()
         m.goSendAmount()
@@ -714,4 +766,46 @@ class AppStateMachineFlowsTest {
         m.forceHealth(HealthState.STALE)
         assertEquals("38 days ago", m.model.value.advanced.funds.lastRefresh)
     }
+}
+
+/** A minimal [LarkCore] with an empty payment history, which the contract permits. */
+private class EmptyHistoryCore : LarkCore {
+    private val walletExistsFlow = MutableStateFlow(false)
+    override val walletExists: StateFlow<Boolean> = walletExistsFlow
+    override val balanceSats: StateFlow<Long> = MutableStateFlow(0L)
+    override val fiatRate: FiatRate = FiatRate(satsPerCent = 10L)
+    override val health: StateFlow<HealthState> = MutableStateFlow(HealthState.READY)
+    override val backedUp: StateFlow<Boolean> = MutableStateFlow(false)
+    override val activity: List<Transaction> = emptyList()
+    override val recents: List<Contact> = emptyList()
+    override val backupWords: List<String> = emptyList()
+    override val receiveCode: String = ""
+    override val depositAddress: String = ""
+    override val networkLabel: String = ""
+
+    override fun createWallet() {
+        walletExistsFlow.value = true
+    }
+
+    override fun restoreWallet() {
+        walletExistsFlow.value = true
+    }
+
+    override fun markBackedUp() = Unit
+
+    override fun advancedStats(): AdvancedStats = AdvancedStats(
+        funds = FundsStats(
+            vtxoCount = 0,
+            vtxoTotalSats = 0L,
+            soonestExpiry = "",
+            lastRefresh = "",
+            onChainReserveSats = 0L,
+            depositAddress = "",
+        ),
+        network = NetworkStats(arkServerStatus = "", nextRound = "", lightningBridge = "", chainTip = 0L),
+    )
+
+    override suspend fun refresh() = Unit
+
+    override suspend fun send(recipient: String, sats: Long): SendResult = SendResult.Success
 }

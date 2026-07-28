@@ -6,10 +6,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
@@ -39,16 +40,26 @@ import xyz.lark.app.ui.screens.settings.SettingsScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
- * Composition root: instantiates the demo engine and the app-wide state machine (the single
- * place a real core slots in later), applies [LarkTheme], and renders the current route.
+ * The app-scoped object graph: the demo engine and the app-wide state machine (the single place
+ * a real core slots in later). A top-level lazy singleton so it survives recomposition and
+ * Android configuration changes (rotation must not reset the app to onboarding); first touch
+ * happens on the main thread inside composition, so [Dispatchers.Main] is available. Cold launch
+ * (fresh process) still starts at the resting route.
+ */
+private object AppGraph {
+    val core: FakeLarkCore by lazy { FakeLarkCore() }
+    val machine: AppStateMachine by lazy {
+        AppStateMachine(core = core, demo = core, scope = CoroutineScope(SupervisorJob() + Dispatchers.Main))
+    }
+}
+
+/**
+ * Composition root: applies [LarkTheme] and renders the current route from the app-scoped
+ * [AppGraph.machine].
  */
 @Composable
 fun App() {
-    val scope = rememberCoroutineScope()
-    val machine = remember(scope) {
-        val core = FakeLarkCore()
-        AppStateMachine(core = core, demo = core, scope = scope)
-    }
+    val machine = AppGraph.machine
     LarkTheme {
         val model by machine.model.collectAsState()
         PlatformBackHandler(enabled = model.canGoBack, onBack = machine::back)
@@ -107,7 +118,7 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             )
             Route.SENDING -> SendingScreen()
             Route.SENT -> SentScreen(
-                amount = model.keypad.amountDisplay,
+                amount = model.sentAmount,
                 recipientName = model.send.recipientName,
                 onDone = { machine.go(Route.HOME) },
             )

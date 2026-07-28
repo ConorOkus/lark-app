@@ -110,6 +110,9 @@ data class DemoHealthOption(
  * The single immutable UI model the whole app renders. Screens are thin: every money string
  * is pre-formatted (MoneyFormat + the core's fiat rate), every piece of health copy comes from
  * the core's HealthState display data.
+ *
+ * [sentAmount] is the amount snapshotted when the send was confirmed — the sent screen renders
+ * it (not the live keypad) so keypad edits after confirming can't alter the message.
  */
 data class AppModel(
     val route: Route,
@@ -120,6 +123,7 @@ data class AppModel(
     val health: HealthModel,
     val keypad: KeypadModel,
     val send: SendModel,
+    val sentAmount: String,
     val txDetail: TxDetailModel,
     val activity: List<ActivityRowModel>,
     val recents: List<Contact>,

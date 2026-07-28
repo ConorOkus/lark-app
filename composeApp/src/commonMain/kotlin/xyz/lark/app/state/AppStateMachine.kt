@@ -46,6 +46,9 @@ private data class MachineState(
     val sendWho: String = DEFAULT_RECIPIENT,
     val input: String = "",
     val txIndex: Int = 0,
+    val confirmedRecipient: String = DEFAULT_RECIPIENT,
+    val confirmedSats: Long = 0L,
+    val confirmedAmountDisplay: String = "",
     val wordsRevealed: Boolean = false,
     val countdown: Int = COUNTDOWN_SECONDS,
     val copied: Boolean = false,
@@ -85,13 +88,14 @@ class AppStateMachine(
 
     /**
      * Pops the stack; on an empty stack lands on the resting route — home with a wallet,
-     * welcome without — so back can never skip onboarding.
+     * welcome without — so back can never skip onboarding. A no-op while a send/refresh is
+     * in flight (SENDING): backing out would race its completion.
      */
     fun back() = update {
-        if (it.stack.isEmpty()) {
-            it.copy(route = restingRoute())
-        } else {
-            it.copy(route = it.stack.last(), stack = it.stack.dropLast(1))
+        when {
+            it.route == Route.SENDING -> it
+            it.stack.isEmpty() -> it.copy(route = restingRoute())
+            else -> it.copy(route = it.stack.last(), stack = it.stack.dropLast(1))
         }
     }
 
@@ -136,17 +140,15 @@ class AppStateMachine(
     /** Appends [digit] ('0'–'9'): max 8 digits, leading zero suppressed on empty. */
     fun keyPress(digit: Char) {
         if (digit !in '0'..'9') return
-        update {
-            when {
-                it.digits.length >= MAX_DIGITS -> it
-                it.digits.isEmpty() && digit == '0' -> it
-                else -> it.copy(digits = it.digits + digit)
-            }
-        }
+        if (state.digits.length >= MAX_DIGITS || (state.digits.isEmpty() && digit == '0')) return
+        update { it.copy(digits = it.digits + digit) }
     }
 
     /** Removes the last digit; no-op when empty. */
-    fun backspace() = update { it.copy(digits = it.digits.dropLast(1)) }
+    fun backspace() {
+        if (state.digits.isEmpty()) return
+        update { it.copy(digits = it.digits.dropLast(1)) }
+    }
 
     /** The keypad's primary action: send mode pushes review, receive mode returns to receive. */
     fun keypadConfirm() {
@@ -185,23 +187,41 @@ class AppStateMachine(
     }
 
     /**
-     * Confirms the payment: emits the sending route first, then awaits [LarkCore.send]
-     * (the working delay lives inside the core) and lands on sent or failed.
+     * Confirms the payment: snapshots the recipient and amount (so later keypad edits can't
+     * alter what's sent or shown on the sent screen), emits the sending route first, then
+     * awaits [LarkCore.send] (the working delay lives inside the core) and lands on sent
+     * or failed.
      */
     fun confirmSend() {
-        val recipient = state.input.ifEmpty { state.sendWho }
         val sats = typedSats(state)
+        update {
+            it.copy(
+                confirmedRecipient = it.input.ifEmpty { it.sendWho },
+                confirmedSats = sats,
+                confirmedAmountDisplay = primary(sats, it.denomination),
+            )
+        }
+        startSend()
+    }
+
+    /** The failed screen's "Try again": re-runs the same send from the confirmed snapshot. */
+    fun tryAgain() = startSend()
+
+    /** Runs the confirmed-snapshot send behind the working spinner. */
+    private fun startSend() {
         push(Route.SENDING)
         workJob?.cancel()
         workJob = scope.launch {
-            val result = core.send(recipient, sats)
+            val result = core.send(state.confirmedRecipient, state.confirmedSats)
             val landing = if (result is SendResult.Success) Route.SENT else Route.FAILED
-            update { it.copy(route = landing, stack = emptyList()) }
+            landIfStillSending(landing)
         }
     }
 
-    /** The failed screen's "Try again": re-runs the same send. */
-    fun tryAgain() = confirmSend()
+    /** Lands [route] only if the user is still on the working screen — a stale job must not steal the route. */
+    private fun landIfStillSending(route: Route) = update {
+        if (it.route == Route.SENDING) it.copy(route = route, stack = emptyList()) else it
+    }
 
     // --- Refresh ---
 
@@ -211,7 +231,7 @@ class AppStateMachine(
         workJob?.cancel()
         workJob = scope.launch {
             core.refresh()
-            update { it.copy(route = Route.HOME, stack = emptyList()) }
+            landIfStillSending(Route.HOME)
         }
     }
 
@@ -296,13 +316,14 @@ class AppStateMachine(
 
     private fun render(s: MachineState): AppModel = AppModel(
         route = s.route,
-        canGoBack = s.stack.isNotEmpty() || s.route != restingRoute(),
+        canGoBack = s.route != Route.SENDING && (s.stack.isNotEmpty() || s.route != restingRoute()),
         screenLabel = s.route.screenLabel,
         denomination = s.denomination,
         balance = renderBalance(s),
         health = renderHealth(),
         keypad = renderKeypad(s),
         send = renderSend(s),
+        sentAmount = s.confirmedAmountDisplay,
         txDetail = renderTxDetail(s),
         activity = core.activity.map { renderActivityRow(it, s.denomination) },
         recents = core.recents,
@@ -374,7 +395,8 @@ class AppStateMachine(
     )
 
     private fun renderTxDetail(s: MachineState): TxDetailModel {
-        val tx = core.activity.getOrElse(s.txIndex) { core.activity.first() }
+        val tx = core.activity.getOrNull(s.txIndex) ?: core.activity.firstOrNull()
+            ?: return placeholderTxDetail(s)
         val sats = if (tx.sats < 0) -tx.sats else tx.sats
         return TxDetailModel(
             verb = if (tx.isSent) "Sent" else "Received",
@@ -386,6 +408,17 @@ class AppStateMachine(
             fee = "None",
         )
     }
+
+    /** Benign placeholder for a core with empty payment history (the [LarkCore] contract permits it). */
+    private fun placeholderTxDetail(s: MachineState): TxDetailModel = TxDetailModel(
+        verb = "Sent",
+        amount = primary(0L, s.denomination),
+        secondaryAmount = secondary(0L, s.denomination),
+        partyLabel = "To",
+        party = "",
+        whenLabel = "",
+        fee = "None",
+    )
 
     private fun renderActivityRow(tx: Transaction, denomination: Denomination): ActivityRowModel =
         ActivityRowModel(
