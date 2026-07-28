@@ -1,8 +1,6 @@
 package xyz.lark.app.ui.screens.activity
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +26,9 @@ import xyz.lark.app.state.TxDetailModel
 import xyz.lark.app.ui.components.KeyValueRow
 import xyz.lark.app.ui.components.LarkIcons
 import xyz.lark.app.ui.components.RowGroupDivider
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.SurfaceCard
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -65,7 +64,7 @@ fun TxDetailScreen(
                 bottom = DetailBottomPadding,
             ),
     ) {
-        DetailBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Spacer(modifier = Modifier.height(AmountBlockTopGap))
         Text(
             text = model.verb,
@@ -122,11 +121,7 @@ private fun TechnicalDetailsRow(onClick: () -> Unit) {
             .fillMaxWidth()
             .clip(shape)
             .border(width = 1.dp, color = Color.White.copy(alpha = TECH_BORDER_ALPHA), shape = shape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickableNoRipple(onClick)
             .padding(TechRowPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -2,8 +2,6 @@ package xyz.lark.app.ui.screens.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,9 +32,12 @@ import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.DemoHealthOption
 import xyz.lark.app.state.Route
+import xyz.lark.app.ui.components.HealthDot
 import xyz.lark.app.ui.components.RowGroup
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.RowGroupDivider
 import xyz.lark.app.ui.components.SectionEyebrow
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -94,7 +94,7 @@ fun AdvancedScreen(
             )
             .verticalScroll(rememberScrollState()),
     ) {
-        SettingsBackButton(onBack = machine::back)
+        ScreenBackButton(onBack = machine::back)
         Text(
             text = "Advanced",
             style = LarkTheme.typography.screenTitle.copy(fontSize = 30.sp, lineHeight = 32.sp),
@@ -257,11 +257,7 @@ private fun ActionButton(
             .clip(shape)
             .background(background)
             .border(width = 1.dp, color = borderColor, shape = shape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
+            .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(text = text, style = LarkTheme.typography.itemTitle.copy(lineHeight = 15.sp), color = textColor)
@@ -301,11 +297,7 @@ private fun DemoOptionRow(option: DemoHealthOption, onClick: () -> Unit) {
             .clip(shape)
             .background(if (option.selected) LarkColors.SurfacePressed else DemoRowBackground)
             .border(width = 1.dp, color = border, shape = shape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickableNoRipple(onClick)
             .padding(horizontal = DemoRowHorizontalPadding, vertical = DemoRowVerticalPadding),
         horizontalArrangement = Arrangement.spacedBy(DemoDotGap),
         verticalAlignment = Alignment.CenterVertically,

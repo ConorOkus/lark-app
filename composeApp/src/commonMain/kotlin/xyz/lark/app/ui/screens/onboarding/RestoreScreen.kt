@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.lark.app.ui.components.GoldPillButton
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.SurfaceCard
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
@@ -47,7 +48,7 @@ fun RestoreScreen(
                 bottom = OnboardingBottomPadding,
             ),
     ) {
-        OnboardingBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Text(
             text = "Type your\n12 words.",
             style = LarkTheme.typography.screenTitle,

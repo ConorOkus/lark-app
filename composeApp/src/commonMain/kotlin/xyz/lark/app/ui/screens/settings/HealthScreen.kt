@@ -1,8 +1,6 @@
 package xyz.lark.app.ui.screens.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,6 +21,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.lark.app.state.HealthModel
 import xyz.lark.app.ui.components.GoldPillButton
+import xyz.lark.app.ui.components.HealthDot
+import xyz.lark.app.ui.components.ScreenBackButton
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -60,7 +60,7 @@ fun HealthScreen(
                 bottom = SettingsBottomPadding,
             ),
     ) {
-        SettingsBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
@@ -115,11 +115,7 @@ private fun DetailsButton(onDetails: () -> Unit) {
             .fillMaxWidth()
             .height(DetailsButtonHeight)
             .clip(CircleShape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDetails,
-            ),
+            .clickableNoRipple(onDetails),
         contentAlignment = Alignment.Center,
     ) {
         Text(

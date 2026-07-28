@@ -27,6 +27,7 @@ import xyz.lark.app.state.KeypadModel
 import xyz.lark.app.state.SendModel
 import xyz.lark.app.ui.components.KeyValueRow
 import xyz.lark.app.ui.components.RowGroupDivider
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.SurfaceCard
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
@@ -59,7 +60,7 @@ fun ReviewScreen(
                 bottom = PayBottomPadding,
             ),
     ) {
-        PayBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(ReviewCenterGap, Alignment.CenterVertically),

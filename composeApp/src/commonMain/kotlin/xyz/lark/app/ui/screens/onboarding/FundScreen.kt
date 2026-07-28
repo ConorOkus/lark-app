@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.sp
 import xyz.lark.app.ui.components.GhostButton
 import xyz.lark.app.ui.components.LarkIcons
 import xyz.lark.app.ui.components.OptionCard
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -51,7 +52,7 @@ fun FundScreen(
                 bottom = OnboardingBottomPadding,
             ),
     ) {
-        OnboardingBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Text(
             text = "Add money.",
             style = LarkTheme.typography.screenTitle,

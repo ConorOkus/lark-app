@@ -1,10 +1,6 @@
 package xyz.lark.app.ui.screens.home
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,15 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -30,7 +23,9 @@ import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.BalanceModel
 import xyz.lark.app.state.HealthModel
 import xyz.lark.app.state.Route
+import xyz.lark.app.ui.components.HealthDot
 import xyz.lark.app.ui.components.LarkTabBar
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -49,12 +44,6 @@ private val HideRowHeight = 44.dp
 
 private const val BALANCE_LABEL_ALPHA = 0.42f
 private const val HIDE_LABEL_ALPHA = 0.4f
-private const val HEX_RADIX = 16
-private const val OPAQUE_MASK = 0xFF000000
-
-/** Parses a `#RRGGBB` design-spec color (e.g. the health dot color) into a [Color]. */
-internal fun colorFromHex(hex: String): Color =
-    Color(hex.removePrefix("#").toLong(radix = HEX_RADIX) or OPAQUE_MASK)
 
 /**
  * Home — balance (spec block `data-screen-label="Home — balance"`): wordmark + health
@@ -122,21 +111,12 @@ private fun HealthChip(health: HealthModel, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .clip(CircleShape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickableNoRipple(onClick)
             .padding(horizontal = ChipHorizontalPadding, vertical = ChipVerticalPadding),
         horizontalArrangement = Arrangement.spacedBy(ChipGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(HealthDotSize)
-                .clip(CircleShape)
-                .background(colorFromHex(health.dotColorHex)),
-        )
+        HealthDot(colorHex = health.dotColorHex, size = HealthDotSize)
         if (health.wordVisible) {
             Text(
                 text = health.word,
@@ -194,11 +174,7 @@ private fun BalanceAmounts(balance: BalanceModel, onToggleUnit: () -> Unit) {
             color = LarkColors.TextTertiary,
             modifier = Modifier
                 .clip(CircleShape)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onToggleUnit,
-                ),
+                .clickableNoRipple(onToggleUnit),
         )
     } else {
         Text(
@@ -220,11 +196,7 @@ private fun HideShowRow(label: String, onClick: () -> Unit) {
         modifier = Modifier
             .height(HideRowHeight)
             .clip(CircleShape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
+            .clickableNoRipple(onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

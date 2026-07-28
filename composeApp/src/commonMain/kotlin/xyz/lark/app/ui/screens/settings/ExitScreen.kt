@@ -1,8 +1,6 @@
 package xyz.lark.app.ui.screens.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -23,8 +20,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.lark.app.ui.components.PillButtonHeight
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.RowGroupDivider
 import xyz.lark.app.ui.components.SurfaceCard
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -57,7 +56,7 @@ fun ExitScreen(
                 bottom = SettingsBottomPadding,
             ),
     ) {
-        SettingsBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
@@ -125,11 +124,7 @@ private fun StartButton(onStart: () -> Unit) {
             .height(PillButtonHeight)
             .clip(CircleShape)
             .background(LarkColors.Warning)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onStart,
-            ),
+            .clickableNoRipple(onStart),
         contentAlignment = Alignment.Center,
     ) {
         Text(

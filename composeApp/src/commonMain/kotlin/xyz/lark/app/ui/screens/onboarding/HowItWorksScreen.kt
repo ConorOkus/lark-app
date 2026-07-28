@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import xyz.lark.app.ui.components.GoldPillButton
 import xyz.lark.app.ui.components.IconCircle
 import xyz.lark.app.ui.components.LarkIcons
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -51,7 +52,7 @@ fun HowItWorksScreen(
                 bottom = OnboardingBottomPadding,
             ),
     ) {
-        OnboardingBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Text(
             text = "Three things\nto know.",
             style = LarkTheme.typography.screenTitle,

@@ -8,8 +8,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,20 +21,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.lark.app.ui.components.IconButtonInset
+import xyz.lark.app.ui.components.LarkIconButton
 import xyz.lark.app.ui.components.LarkIcons
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -98,11 +97,11 @@ fun ScanScreen(
                 end = PayHorizontalPadding,
             ),
         ) {
-            PayIconButton(
+            LarkIconButton(
                 icon = LarkIcons.Close,
-                contentDescription = "Close",
                 onClick = onClose,
-                modifier = Modifier.offset(x = -PayIconButtonInset),
+                modifier = Modifier.offset(x = -IconButtonInset),
+                contentDescription = "Close",
                 iconSize = CloseIconSize,
                 tint = Color.White,
             )
@@ -138,7 +137,7 @@ fun ScanScreen(
 @Composable
 private fun ScanFrame() {
     val transition = rememberInfiniteTransition(label = "ScanPulse")
-    val pulse by transition.animateFloat(
+    val pulse = transition.animateFloat(
         initialValue = PULSE_MIN_ALPHA,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -158,7 +157,7 @@ private fun ScanFrame() {
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth().alpha(pulse),
+            modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = pulse.value },
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -186,11 +185,7 @@ private fun SimulateScanButton(onClick: () -> Unit, modifier: Modifier = Modifie
             .height(SimulateButtonHeight)
             .clip(CircleShape)
             .background(Color.White.copy(alpha = SIMULATE_BG_ALPHA))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
+            .clickableNoRipple(onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(

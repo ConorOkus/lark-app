@@ -10,11 +10,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import xyz.lark.app.ui.theme.LarkColors
@@ -43,9 +45,10 @@ fun GoldSpinner(
         ),
         label = "GoldSpinnerAngle",
     )
+    val strokeWidthPx = with(LocalDensity.current) { strokeWidth.toPx() }
+    val stroke = remember(strokeWidthPx) { Stroke(width = strokeWidthPx, cap = StrokeCap.Round) }
     Canvas(modifier = modifier.size(size)) {
-        val stroke = Stroke(width = strokeWidth.toPx(), cap = StrokeCap.Round)
-        val inset = strokeWidth.toPx() / 2f
+        val inset = strokeWidthPx / 2f
         val arcSize = Size(this.size.width - inset * 2f, this.size.height - inset * 2f)
         val topLeft = Offset(inset, inset)
         drawArc(

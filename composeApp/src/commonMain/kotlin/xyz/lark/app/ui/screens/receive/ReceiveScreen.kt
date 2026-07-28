@@ -2,8 +2,6 @@ package xyz.lark.app.ui.screens.receive
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,19 +10,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.lark.app.state.ReceiveModel
 import xyz.lark.app.ui.components.GoldPillButton
-import xyz.lark.app.ui.components.LarkIcons
 import xyz.lark.app.ui.components.OutlinePillButton
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -46,8 +39,6 @@ private val ReceiveBottomPadding: Dp = 40.dp
 
 private val TopRowHeight = 44.dp
 private val BackButtonSize = 44.dp
-private val BackButtonInset = 10.dp
-private val BackIconSize = 22.dp
 
 private val CenterTopGap = 14.dp
 private val CenterGap = 20.dp
@@ -128,7 +119,7 @@ private fun TopRow(onBack: () -> Unit) {
         modifier = Modifier.fillMaxWidth().height(TopRowHeight),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Text(
             text = "Get paid",
             modifier = Modifier.weight(1f),
@@ -137,30 +128,6 @@ private fun TopRow(onBack: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.width(BackButtonSize))
-    }
-}
-
-/** 44x44 tap target nudged 10dp into the leading margin (the spec's `margin:0 -10px`). */
-@Composable
-private fun BackButton(onBack: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .offset(x = -BackButtonInset)
-            .size(BackButtonSize)
-            .clip(CircleShape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onBack,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = LarkIcons.BackChevron,
-            contentDescription = "Back",
-            modifier = Modifier.size(BackIconSize),
-            tint = LarkColors.TextPrimary,
-        )
     }
 }
 

@@ -1,5 +1,6 @@
 package xyz.lark.app.core.format
 
+import kotlin.math.abs
 import xyz.lark.app.core.model.FiatRate
 
 /**
@@ -41,8 +42,6 @@ object MoneyFormat {
     fun signedFiat(sats: Long, rate: FiatRate): String = sign(sats) + fiat(abs(sats), rate)
 
     private fun sign(sats: Long): String = if (sats > 0) PLUS_SIGN else MINUS_SIGN
-
-    private fun abs(sats: Long): Long = if (sats < 0) -sats else sats
 
     /** Groups a non-negative number with comma separators: `1000000` → `1,000,000`. */
     private fun grouped(value: Long): String =

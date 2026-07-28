@@ -32,7 +32,9 @@ import androidx.compose.ui.unit.sp
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.KeypadModel
 import xyz.lark.app.ui.components.GoldPillButton
+import xyz.lark.app.ui.components.LarkIconButton
 import xyz.lark.app.ui.components.LarkIcons
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -105,7 +107,7 @@ private fun AmountTopRow(header: String, onBack: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PayIconButton(icon = LarkIcons.BackChevron, contentDescription = "Back", onClick = onBack)
+        LarkIconButton(icon = LarkIcons.BackChevron, onClick = onBack, contentDescription = "Back")
         Text(
             text = header,
             style = LarkTheme.typography.itemTitle.copy(fontSize = 15.sp, lineHeight = 15.sp),
@@ -158,11 +160,7 @@ private fun SecondaryChip(secondary: String, onToggleUnit: () -> Unit) {
         modifier = Modifier
             .clip(CircleShape)
             .background(Color.White.copy(alpha = CHIP_BG_ALPHA))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onToggleUnit,
-            )
+            .clickableNoRipple(onToggleUnit)
             .padding(horizontal = ChipHorizontalPadding, vertical = ChipVerticalPadding),
         horizontalArrangement = Arrangement.spacedBy(ChipGap),
         verticalAlignment = Alignment.CenterVertically,

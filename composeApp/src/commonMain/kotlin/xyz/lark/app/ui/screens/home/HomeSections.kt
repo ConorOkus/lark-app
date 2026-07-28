@@ -2,8 +2,6 @@ package xyz.lark.app.ui.screens.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.lark.app.core.model.BannerCopy
 import xyz.lark.app.ui.components.LarkIcons
+import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 
@@ -65,11 +63,7 @@ internal fun AttentionBanner(banner: BannerCopy, offline: Boolean, onClick: () -
             .clip(shape)
             .background(tint.copy(alpha = BANNER_BG_ALPHA))
             .border(width = 1.dp, color = tint.copy(alpha = BANNER_BORDER_ALPHA), shape = shape)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickableNoRipple(onClick)
             .padding(BannerPadding),
         horizontalArrangement = Arrangement.spacedBy(BannerGap),
         verticalAlignment = Alignment.CenterVertically,
@@ -162,11 +156,7 @@ private fun ActionTile(
             .clip(shape)
             .background(if (gold) LarkColors.Gold else Color.Transparent)
             .then(borderModifier)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickableNoRipple(onClick)
             .padding(TilePadding),
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.Start,

@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
@@ -75,7 +76,7 @@ fun TxTechScreen(
                 bottom = DetailBottomPadding,
             ),
     ) {
-        DetailBackButton(onBack = onBack)
+        ScreenBackButton(onBack = onBack)
         Spacer(modifier = Modifier.height(TitleTopGap))
         Text(
             text = "Technical details",

@@ -2,6 +2,13 @@ package xyz.lark.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
+private const val HEX_RADIX = 16
+private const val OPAQUE_MASK = 0xFF000000
+
+/** Parses a `#RRGGBB` design-spec color (e.g. the health dot color) into a [Color]. */
+internal fun colorFromHex(hex: String): Color =
+    Color(hex.removePrefix("#").toLong(radix = HEX_RADIX) or OPAQUE_MASK)
+
 /**
  * Color roles of the LARK Wallet design language.
  *
