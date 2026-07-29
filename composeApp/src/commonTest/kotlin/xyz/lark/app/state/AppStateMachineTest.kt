@@ -10,7 +10,14 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.gateway.BarkdApiVariant
+import xyz.lark.app.core.gateway.BarkdScript
+import xyz.lark.app.core.gateway.barkdEngine
+import xyz.lark.app.core.gateway.gatewayCore
 import xyz.lark.app.core.model.AdvancedStats
+import xyz.lark.app.core.model.ChannelDisplay
+import xyz.lark.app.core.model.ChannelState
+import xyz.lark.app.core.model.ChannelsSnapshot
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.FiatRate
 import xyz.lark.app.core.model.FundsStats
@@ -902,6 +909,151 @@ class AppStateMachineFlowsTest {
         runCurrent()
         assertTrue(m.model.value.backup.backedUp)
         assertEquals("Done", m.model.value.backup.statusLabel)
+    }
+}
+
+/** Advanced channel rows (plan U5): the bridge summary, per-channel rows, and the footer label. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class AppStateMachineChannelsTest {
+
+    private fun TestScope.channelsMachine(core: LarkCore): AppStateMachine =
+        AppStateMachine(core = core, demo = null, scope = backgroundScope)
+
+    @Test
+    fun nullSnapshotPassesTheCoreBridgeStringThroughUnchanged() = runTest {
+        // The demo core never fetches channels; its bridge row stays the fake's own string.
+        val m = machine()
+        assertEquals("Open · 2 peers", m.model.value.channels.bridgeValue)
+        assertTrue(m.model.value.channels.rows.isEmpty())
+    }
+
+    @Test
+    fun nullSnapshotRendersTheEmDashPlaceholderExactlyAsToday() = runTest {
+        // The stock gateway's not-exposed placeholder — the same "—" GatewayLarkCoreDataTest pins.
+        val m = channelsMachine(ChannelsCore(bridgePlaceholder = "—"))
+        assertEquals("—", m.model.value.channels.bridgeValue)
+        assertTrue(m.model.value.channels.rows.isEmpty())
+    }
+
+    @Test
+    fun polledAndEmptySnapshotRendersZeroChannels() = runTest {
+        val core = ChannelsCore()
+        val m = channelsMachine(core)
+        core.channelsFlow.value = ChannelsSnapshot(channels = emptyList(), totalLocalSat = 0L)
+        runCurrent() // a core emission outside any intent must reach the model
+        assertEquals("0 channels", m.model.value.channels.bridgeValue)
+        assertTrue(m.model.value.channels.rows.isEmpty())
+    }
+
+    @Test
+    fun twoChannelsRenderTheBridgeSummaryAndOneRowEach() = runTest {
+        val core = ChannelsCore()
+        val m = channelsMachine(core)
+        core.channelsFlow.value = TWO_CHANNELS
+        runCurrent()
+        with(m.model.value.channels) {
+            // The bridge total is the snapshot's totalLocalSat (msat-truncated upstream), not a re-sum.
+            assertEquals("2 channels · ₿169,999", bridgeValue)
+            assertEquals(2, rows.size)
+            assertEquals("1230abc…f00d456", rows[0].shortId)
+            assertEquals("₿120,000 of ₿200,000 · usable", rows[0].value)
+            assertEquals("block 918,402 · in 27 days", rows[0].expiryLabel)
+            assertEquals("9a8b7c6…d5e4f31", rows[1].shortId)
+            assertEquals("₿50,000 of ₿1,000,000 · opening", rows[1].value)
+            assertEquals("—", rows[1].expiryLabel) // absent expiry_height stays the em-dash
+        }
+    }
+
+    @Test
+    fun singleUnusableChannelRendersSingularCountAndUnusableLabel() = runTest {
+        val core = ChannelsCore()
+        val m = channelsMachine(core)
+        core.channelsFlow.value = ChannelsSnapshot(
+            channels = listOf(
+                ChannelDisplay(
+                    shortId = "aaa…bbb",
+                    localSat = 1_000L,
+                    capacitySat = 2_000L,
+                    state = ChannelState.UNUSABLE,
+                    expiryLabel = "—",
+                ),
+            ),
+            totalLocalSat = 1_000L,
+        )
+        runCurrent()
+        with(m.model.value.channels) {
+            assertEquals("1 channel · ₿1,000", bridgeValue)
+            assertEquals("₿1,000 of ₿2,000 · unusable", rows.single().value)
+        }
+    }
+
+    @Test
+    fun hiddenBalanceMasksChannelAmountsButNotCountsOrExpiry() = runTest {
+        val core = ChannelsCore()
+        val m = channelsMachine(core)
+        core.channelsFlow.value = TWO_CHANNELS
+        runCurrent()
+        m.toggleBalance()
+        with(m.model.value.channels) {
+            assertEquals("2 channels · ••••", bridgeValue)
+            assertEquals("•••• of •••• · usable", rows[0].value)
+            assertEquals("block 918,402 · in 27 days", rows[0].expiryLabel)
+        }
+        m.toggleBalance()
+        assertEquals("2 channels · ₿169,999", m.model.value.channels.bridgeValue)
+    }
+
+    @Test
+    fun forkConfiguredGatewayCoreRendersTheInjectedFooterLabel() = runTest {
+        // R5 decoupling: the fork identifies as signet on the wire; the footer stays mutinynet.
+        val core = gatewayCore(
+            engine = barkdEngine(BarkdScript(BarkdScript.forkDefaults)),
+            variant = BarkdApiVariant.FORK_BETA6,
+            expectedNetwork = "signet",
+            networkLabel = "mutinynet",
+        )
+        val m = channelsMachine(core)
+        assertEquals("mutinynet", m.model.value.networkLabel)
+    }
+}
+
+/** Two display channels whose locals (120k + 50k) deliberately do not sum to the snapshot total. */
+private val TWO_CHANNELS = ChannelsSnapshot(
+    channels = listOf(
+        ChannelDisplay(
+            shortId = "1230abc…f00d456",
+            localSat = 120_000L,
+            capacitySat = 200_000L,
+            state = ChannelState.USABLE,
+            expiryLabel = "block 918,402 · in 27 days",
+        ),
+        ChannelDisplay(
+            shortId = "9a8b7c6…d5e4f31",
+            localSat = 50_000L,
+            capacitySat = 1_000_000L,
+            state = ChannelState.OPENING,
+            expiryLabel = "—",
+        ),
+    ),
+    totalLocalSat = 169_999L,
+)
+
+/**
+ * A [FakeLarkCore]-backed core with a test-controlled channels flow (the fake itself stays null
+ * forever) and an optionally overridden Lightning-bridge placeholder string, so machine tests can
+ * pin the gateway's em-dash without wiring a full harness.
+ */
+private class ChannelsCore(
+    private val bridgePlaceholder: String? = null,
+    private val fake: FakeLarkCore = FakeLarkCore(startWithWallet = true),
+) : LarkCore by fake {
+    val channelsFlow = MutableStateFlow<ChannelsSnapshot?>(null)
+    override val channels: StateFlow<ChannelsSnapshot?> = channelsFlow
+
+    override fun advancedStats(): AdvancedStats {
+        val stats = fake.advancedStats()
+        val placeholder = bridgePlaceholder ?: return stats
+        return stats.copy(network = stats.network.copy(lightningBridge = placeholder))
     }
 }
 
