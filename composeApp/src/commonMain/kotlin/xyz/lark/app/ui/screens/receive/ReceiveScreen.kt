@@ -1,5 +1,6 @@
 package xyz.lark.app.ui.screens.receive
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -21,10 +23,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.alexzhirkevich.qrose.rememberQrCodePainter
 import xyz.lark.app.state.ReceiveModel
 import xyz.lark.app.ui.components.GoldPillButton
 import xyz.lark.app.ui.components.OutlinePillButton
@@ -53,11 +57,16 @@ private val CtaTopGap = 20.dp
 private val CtaGap = 10.dp
 private val CtaHeight = 56.dp
 
+/** The white QR card (the spec's `padding:18px;border-radius:28px;background:#fff` wrapper). */
+private val QrCardRadius = 28.dp
+private val QrCardPadding = 18.dp
+private val QrSize = 246.dp
+
 private const val CODE_TEXT_ALPHA = 0.6f
 
 /**
  * Get paid (spec block `data-screen-label="Get paid"`): back chevron + centered title,
- * the white fake-QR card, the "One code, any wallet" text block, the mono code box, and
+ * the white QR card, the "One code, any wallet" text block, the mono code box, and
  * the Copy / Set amount pill pair.
  */
 @Composable
@@ -88,7 +97,7 @@ fun ReceiveScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
         ) {
-            FakeQr()
+            ReceiveQr(code = receive.code)
             TextBlock()
             CodeBox(code = receive.code)
         }
@@ -129,6 +138,23 @@ private fun TopRow(onBack: () -> Unit) {
         )
         Spacer(modifier = Modifier.width(BackButtonSize))
     }
+}
+
+/**
+ * The 246dp receive-code QR inside its 18dp-padded white rounded card. Encodes EXACTLY
+ * [code] — the same string the code box below displays (AE3's one-source rule).
+ */
+@Composable
+private fun ReceiveQr(code: String) {
+    Image(
+        painter = rememberQrCodePainter(code),
+        contentDescription = "Receive code QR",
+        modifier = Modifier
+            .clip(RoundedCornerShape(QrCardRadius))
+            .background(Color.White)
+            .padding(QrCardPadding)
+            .size(QrSize),
+    )
 }
 
 /** "One code, any wallet" headline and its 14sp explainer, centered, max 300dp wide. */
