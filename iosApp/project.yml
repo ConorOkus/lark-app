@@ -9,6 +9,12 @@ targets:
     platform: iOS
     sources:
       - iosApp
+    # Compose Multiplatform's PlistSanityCheck aborts at runtime unless this key
+    # is a literal Info.plist entry (no INFOPLIST_KEY_* build setting exists for it).
+    info:
+      path: iosApp/Info.plist
+      properties:
+        CADisableMinimumFrameDurationOnPhone: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: xyz.lark.app
