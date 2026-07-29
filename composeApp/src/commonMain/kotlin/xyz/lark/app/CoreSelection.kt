@@ -18,7 +18,8 @@ internal data class CoreSelection(val core: LarkCore, val demo: DemoControls?)
 /**
  * Builds the configured core (plan U6, R10). DEMO wires the fake as both core and demo
  * controls, exactly as before (AE4). GATEWAY wires [GatewayLarkCore] over the platform HTTP
- * [engine] with `demo = null`, so the Advanced DEMO rail's existing null-gating hides it.
+ * [engine], speaking [CoreConfig.apiVariant]'s barkd surface, with `demo = null`, so the
+ * Advanced DEMO rail's existing null-gating hides it.
  * Non-default parameters exist for tests; production callers pass only mode and scope.
  */
 @OptIn(ExperimentalTime::class) // GatewayLarkCore's injectable clock (kotlin.time, stable enough for M1)
@@ -32,7 +33,7 @@ internal fun buildCore(
     CoreMode.DEMO -> FakeLarkCore().let { fake -> CoreSelection(core = fake, demo = fake) }
     CoreMode.GATEWAY -> CoreSelection(
         core = GatewayLarkCore(
-            api = BarkdApi(engine(), gatewayBaseUrl),
+            api = BarkdApi(engine(), gatewayBaseUrl, variant = CoreConfig.apiVariant),
             scope = scope,
             expectedNetwork = expectedNetwork,
         ),

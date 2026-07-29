@@ -33,11 +33,19 @@ class BarkdApiTest {
         }
     }
 
+    /** Routes the FORK_BETA6 surface to its fork-spec fixtures. */
+    private fun forkFixtureEngine() = MockEngine { request ->
+        respond(BarkdFixtures.forkByPath.getValue(request.url.encodedPath), HttpStatusCode.OK, jsonHeaders)
+    }
+
     private fun jsonEngine(body: String, status: HttpStatusCode = HttpStatusCode.OK) =
         MockEngine { respond(body, status, jsonHeaders) }
 
     private fun api(engine: HttpClientEngine, auth: AuthDecorator = NoAuth) =
         BarkdApi(engine, BASE_URL, auth)
+
+    private fun forkApi(engine: HttpClientEngine, auth: AuthDecorator = NoAuth) =
+        BarkdApi(engine, BASE_URL, auth, BarkdApiVariant.FORK_BETA6)
 
     private fun <T> BarkdResult<T>.okValue(): T = assertIs<BarkdResult.Ok<T>>(this).value
 
@@ -247,6 +255,92 @@ class BarkdApiTest {
         results.forEachIndexed { index, result ->
             assertIs<BarkdResult.Ok<*>>(result, "endpoint #$index was not Ok: $result")
         }
+    }
+
+    // --- Variant route table (FORK_BETA6) ---
+
+    @Test
+    fun historyRoutesThroughWalletHistoryOnFork() = runTest {
+        val engine = forkFixtureEngine()
+        val movements = forkApi(engine).history().okValue()
+        assertEquals(7, movements.single().id)
+        assertEquals(HttpMethod.Get to "/api/v1/wallet/history", engine.singleRequestLine())
+    }
+
+    @Test
+    fun forkCreateWalletPostsArkServerAndEsploraChainSource() = runTest {
+        val engine = forkFixtureEngine()
+        val request = ForkCreateWalletRequest(
+            network = "mutinynet",
+            arkServer = "https://captaind.test",
+            chainSource = ChainSourceConfig(esplora = EsploraChainSource(url = "https://esplora.test")),
+        )
+        val response = forkApi(engine).createWallet(request).okValue()
+        assertEquals("f00dbabe", response.fingerprint)
+        assertEquals(HttpMethod.Post to "/api/v1/wallet/create", engine.singleRequestLine())
+        val body = engine.requestHistory.single().body.toByteArray().decodeToString()
+        assertTrue(body.contains("\"ark_server\":\"https://captaind.test\""), body)
+        assertTrue(body.contains("\"chain_source\":{\"esplora\":{\"url\":\"https://esplora.test\"}}"), body)
+        assertTrue(!body.contains("bitcoind"), body)
+    }
+
+    @Test
+    fun stockCreateWalletBodyKeepsStockShape() = runTest {
+        val engine = fixtureEngine()
+        api(engine).createWallet(CreateWalletRequest(network = "signet")).okValue()
+        val body = engine.requestHistory.single().body.toByteArray().decodeToString()
+        assertTrue(body.contains("\"network\":\"signet\""), body)
+        assertTrue(!body.contains("chain_source"), body)
+        assertTrue(!body.contains("ark_server"), body)
+    }
+
+    @Test
+    fun channelsDecodesLiveObservedShapeWithoutExpiryHeight() = runTest {
+        val engine = forkFixtureEngine()
+        val channel = forkApi(engine).channels().okValue().single()
+        assertEquals("741e8bd3", channel.channelId)
+        assertEquals("024fb4d3", channel.counterparty)
+        assertEquals(1_000_000L, channel.capacitySat)
+        assertEquals(500_000_000L, channel.localBalanceMsat)
+        assertTrue(!channel.isUsable)
+        assertTrue(!channel.isChannelReady)
+        assertNull(channel.expiryHeight)
+        assertEquals(144, channel.forceCloseSpendDelay)
+        assertEquals(HttpMethod.Get to "/api/v1/lightning/channels", engine.singleRequestLine())
+    }
+
+    @Test
+    fun channelsBalanceDecodesBalanceSat() = runTest {
+        val engine = forkFixtureEngine()
+        assertEquals(500_000L, forkApi(engine).channelsBalance().okValue().balanceSat)
+        assertEquals(HttpMethod.Get to "/api/v1/lightning/channels/balance", engine.singleRequestLine())
+    }
+
+    @Test
+    fun nextAddressPostsAndDecodesAddress() = runTest {
+        val engine = forkFixtureEngine()
+        assertEquals("ark1qforknext", forkApi(engine).nextAddress().okValue().address)
+        assertEquals(HttpMethod.Post to "/api/v1/wallet/addresses/next", engine.singleRequestLine())
+    }
+
+    @Test
+    fun forkBalanceWithExplicitNullPendingExitDecodes() = runTest {
+        val balance = forkApi(forkFixtureEngine()).balance().okValue()
+        assertEquals(412_350L, balance.spendableSat)
+        assertNull(balance.pendingExitSat)
+    }
+
+    @Test
+    fun forkArkInfoWithSupportsChannelsAndNoFeesDecodes() = runTest {
+        val info = forkApi(forkFixtureEngine()).arkInfo().okValue()
+        assertEquals("mutinynet", info.network)
+        assertEquals(12_960, info.vtxoExpiryDelta)
+        assertEquals(true, info.supportsChannels)
+    }
+
+    @Test
+    fun stockArkInfoDecodesWithoutSupportsChannels() = runTest {
+        assertNull(api(fixtureEngine()).arkInfo().okValue().supportsChannels)
     }
 
     // --- Auth decoration ---

@@ -7,9 +7,11 @@ import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonObject
 
 // DTOs mirror the vendored barkd 0.4.0 contract (docs/gateway/barkd-openapi-0.4.0.json)
-// field-for-field via @SerialName. Nested shapes are modelled only as deep as the core
-// needs; everything else is dropped by ignoreUnknownKeys (see BarkdApi's Json config).
-// All amounts are integer sats (KTD-6); heights use Long because the spec types them u32.
+// field-for-field via @SerialName; fork-only shapes at the bottom of the file mirror the
+// vendored fork contract (docs/gateway/barkd-fork-openapi-0.1.0-beta.6.json) the same way.
+// Nested shapes are modelled only as deep as the core needs; everything else is dropped by
+// ignoreUnknownKeys (see BarkdApi's Json config). All amounts are integer sats (KTD-6);
+// heights use Long because the specs type them u32.
 
 /** `GET /api/v1/wallet/balance` — the wallet's balances, broken down by state. */
 @Serializable
@@ -200,7 +202,8 @@ data class TipResponse(
 
 /**
  * `GET /api/v1/wallet/ark-info`, kept shallow: only the fields the core needs for health
- * and expiry math; fee schedule, pubkeys and protocol limits are ignored.
+ * and expiry math; fee schedule, pubkeys and protocol limits are ignored. Both surfaces
+ * send every field decoded here except [supportsChannels], which only the fork sends.
  */
 @Serializable
 data class ArkInfo(
@@ -208,6 +211,8 @@ data class ArkInfo(
     @SerialName("round_interval") val roundInterval: String,
     @SerialName("vtxo_expiry_delta") val vtxoExpiryDelta: Int,
     @SerialName("vtxo_exit_delta") val vtxoExitDelta: Int,
+    /** Fork only: whether the server opens Ark Lightning channels. Null on stock 0.4.0. */
+    @SerialName("supports_channels") val supportsChannels: Boolean? = null,
 )
 
 /**
@@ -230,4 +235,96 @@ data class WalletVtxoInfo(
 @Serializable
 data class VtxoStateInfo(
     val type: String,
+)
+
+// --- Fork-only shapes (barkd fork 0.1.0-beta.6; BarkdApiVariant.FORK_BETA6) ---
+
+/**
+ * One LDK channel from the fork's `GET /api/v1/lightning/channels`, kept shallow: identity,
+ * capacity/balance and readiness; pending HTLC lists and refresh height are ignored.
+ */
+@Serializable
+data class LightningChannelInfo(
+    /** Hex-encoded 32-byte channel ID. */
+    @SerialName("channel_id") val channelId: String,
+    /** Counterparty node public key. */
+    val counterparty: String,
+    @SerialName("capacity_sat") val capacitySat: Long,
+    @SerialName("local_balance_msat") val localBalanceMsat: Long,
+    /** Whether the channel is ready to route payments. */
+    @SerialName("is_usable") val isUsable: Boolean,
+    /** Whether the funding transaction is confirmed. */
+    @SerialName("is_channel_ready") val isChannelReady: Boolean,
+    /** Height the backing VTXO expires at; null (or absent entirely) when unknown. */
+    @SerialName("expiry_height") val expiryHeight: Long? = null,
+    /** Relative CSV delay before our force-close outputs are spendable. */
+    @SerialName("force_close_spend_delay") val forceCloseSpendDelay: Int? = null,
+)
+
+/** Fork `GET /api/v1/lightning/channels/balance` — total local balance across usable channels. */
+@Serializable
+data class LightningBalanceInfo(
+    @SerialName("balance_sat") val balanceSat: Long,
+)
+
+/** Fork `POST /api/v1/wallet/addresses/next` — a freshly derived Ark address. */
+@Serializable
+data class Address(
+    val address: String,
+)
+
+/**
+ * The fork's `POST /api/v1/wallet/create` request; unlike [CreateWalletRequest], the fork
+ * requires [arkServer] and [chainSource]. [network] is `mainnet`/`signet`/`mutinynet`/`regtest`.
+ */
+@Serializable
+data class ForkCreateWalletRequest(
+    val network: String,
+    @SerialName("ark_server") val arkServer: String,
+    @SerialName("chain_source") val chainSource: ChainSourceConfig,
+    val mnemonic: String? = null,
+)
+
+/**
+ * The fork's `ChainSourceConfig` union: exactly one of [esplora] or [bitcoind] must be
+ * non-null. BarkdApi's Json omits nulls (`explicitNulls = false`), so the encoded body
+ * carries only the chosen branch, matching the spec's `oneOf`.
+ */
+@Serializable
+data class ChainSourceConfig(
+    val esplora: EsploraChainSource? = null,
+    val bitcoind: BitcoindChainSource? = null,
+)
+
+/** An Esplora HTTP server as chain source. */
+@Serializable
+data class EsploraChainSource(
+    val url: String,
+)
+
+/** A bitcoind RPC server as chain source. */
+@Serializable
+data class BitcoindChainSource(
+    val bitcoind: String,
+    @SerialName("bitcoind_auth") val bitcoindAuth: BitcoindAuth,
+)
+
+/** The fork's `BitcoindAuth` union: exactly one of [cookie] or [userPass] must be non-null. */
+@Serializable
+data class BitcoindAuth(
+    val cookie: BitcoindCookieAuth? = null,
+    @SerialName("user-pass") val userPass: BitcoindUserPassAuth? = null,
+)
+
+/** Cookie-file authentication for a [BitcoindChainSource]. */
+@Serializable
+data class BitcoindCookieAuth(
+    val cookie: String,
+)
+
+/** Username/password authentication for a [BitcoindChainSource]. */
+@Serializable
+data class BitcoindUserPassAuth(
+    val user: String,
+    val pass: String,
 )
