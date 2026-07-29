@@ -108,7 +108,7 @@ class GatewayLarkCoreForkTest {
         assertEquals(0, script.countOf(Paths.WALLET), "the fork has no wallet-existence probe")
         assertEquals(1, script.countOf(Paths.CREATE))
         val body = script.bodyOf(Paths.CREATE)
-        assertTrue(body.contains("\"network\":\"mutinynet\""), body)
+        assertTrue(body.contains("\"network\":\"signet\""), body)
         assertTrue(body.contains("\"ark_server\":\"http://captaind.test:3535\""), body)
         assertTrue(body.contains("\"chain_source\":{\"esplora\":{\"url\":\"http://esplora.test:3003\"}}"), body)
         assertFalse(body.contains("mnemonic"), "create-without-mnemonic: $body")
@@ -151,7 +151,8 @@ class GatewayLarkCoreForkTest {
     fun forkAgainstAServerWithoutChannelSupportHardFailsOffline() = runTest {
         val script = forkScript()
         // Stock-shaped ark-info: the right network, but no supports_channels field at all.
-        script.sticky(Paths.ARK_INFO, BarkdScript.Json(HealthyFixtures.ARK_INFO_MUTINYNET))
+        val stockInfoOnSignet = HealthyFixtures.ARK_INFO_MUTINYNET.replace("mutinynet", "signet")
+        script.sticky(Paths.ARK_INFO, BarkdScript.Json(stockInfoOnSignet))
         val core = settledForkCore(script)
 
         assertEquals(HealthState.OFFLINE, core.health.value)
@@ -181,11 +182,24 @@ class GatewayLarkCoreForkTest {
     @Test
     fun forkNetworkMismatchStillHardFailsOffline() = runTest {
         val script = forkScript()
-        script.sticky(Paths.ARK_INFO, BarkdScript.Json(BarkdFixtures.FORK_ARK_INFO.replace("mutinynet", "signet")))
+        // The daemon reports a different network id than the fixture's real-world signet.
+        script.sticky(Paths.ARK_INFO, BarkdScript.Json(BarkdFixtures.FORK_ARK_INFO.replace("signet", "mutinynet")))
         val core = settledForkCore(script)
 
         assertEquals(HealthState.OFFLINE, core.health.value)
         assertEquals(GatewayOfflineReason.NETWORK_MISMATCH, core.offlineReason.value)
+    }
+
+    @Test
+    fun forkWalletlessUnreachableDaemonReadsOffline() = runTest {
+        // Every endpoint down: onboarding against a dead gateway must not idle at READY.
+        val script = BarkdScript(BarkdScript.forkDefaults.mapValues { BarkdScript.Broken("daemon down") })
+        val core = forkCore(script)
+        advanceThrough(15.seconds)
+
+        assertEquals(HealthState.OFFLINE, core.health.value, "walletless reachability must classify")
+        assertEquals(GatewayOfflineReason.UNREACHABLE, core.offlineReason.value)
+        assertFalse(core.walletExists.value)
     }
 
     // --- Channels snapshot (plan U4) ---

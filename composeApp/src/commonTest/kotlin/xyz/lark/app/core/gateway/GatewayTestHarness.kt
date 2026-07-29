@@ -171,8 +171,10 @@ internal val FORK_WALLET = ForkWalletConfig(
 internal fun TestScope.gatewayCore(
     engine: MockEngine,
     variant: BarkdApiVariant = BarkdApiVariant.STOCK_0_4,
-    expectedNetwork: String = "mutinynet",
-    networkLabel: String = expectedNetwork,
+    // The fork daemon identifies as signet on the wire while the product is mutinynet (R5) —
+    // fork cores default to the real pairing so happy-path tests exercise the live config.
+    expectedNetwork: String = if (variant == BarkdApiVariant.FORK_BETA6) "signet" else "mutinynet",
+    networkLabel: String = if (variant == BarkdApiVariant.FORK_BETA6) "mutinynet" else expectedNetwork,
     pollInterval: Duration = 15.seconds,
     backoff: List<Duration> = listOf(1.seconds, 2.seconds, 4.seconds),
     scope: CoroutineScope = backgroundScope,

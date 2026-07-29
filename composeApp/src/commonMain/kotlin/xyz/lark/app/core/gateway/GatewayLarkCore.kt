@@ -394,8 +394,13 @@ class GatewayLarkCore(
     }
 
     private suspend fun probeWallet(cycle: CycleOutcome) {
-        // The fork surface has no `GET /wallet`: existence is only ever learned from create.
-        if (api.capabilities.usesForkCreateRequest) return
+        // The fork surface has no `GET /wallet`: existence is only ever learned from create, so
+        // the walletless cycle pings instead — a down gateway still classifies into health
+        // rather than idling at READY while onboarding.
+        if (api.capabilities.usesForkCreateRequest) {
+            cycle.note(api.ping())
+            return
+        }
         cycle.note(api.walletExists())?.let { walletExistsFlow.value = it.fingerprint != null }
     }
 

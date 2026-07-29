@@ -178,7 +178,7 @@ object BarkdFixtures {
     // and `offboard_fixed_fee_vb` but NO `fees` object or `max_offboard_inputs`.
     val FORK_ARK_INFO = """
         {
-          "network": "mutinynet",
+          "network": "signet",
           "server_pubkey": "02cc",
           "mailbox_pubkey": "02dd",
           "round_interval": "30s",
@@ -220,9 +220,33 @@ object BarkdFixtures {
     )
 
     /**
-     * Response fixture per endpoint path of the FORK_BETA6 surface (only the endpoints whose
-     * path or shape differs from stock; [MOVEMENT] and [CREATE_WALLET] are shared because the
-     * fork's response schemas for them match).
+     * Fork vtxos: the fork's `VtxoInfo` additionally requires `exit_depth`, and its state
+     * union has no `exited` variant (nor `action_id` on `locked`) — a fork-specific fixture,
+     * kept far-expiry against [TIP] so fork defaults stay healthy.
+     */
+    const val FORK_VTXOS = """
+        [
+          {
+            "id": "3333333333333333333333333333333333333333333333333333333333333333:0",
+            "amount_sat": 412350,
+            "policy_type": "pubkey",
+            "user_pubkey": "02aa",
+            "server_pubkey": "02bb",
+            "expiry_height": 924854,
+            "exit_delta": 12,
+            "exit_depth": 1,
+            "chain_anchor": "4444444444444444444444444444444444444444444444444444444444444444:1",
+            "state": {"type": "spendable"}
+          }
+        ]
+    """
+
+    /**
+     * Response fixture per endpoint path of the FORK_BETA6 surface. Every endpoint the fork
+     * variant consumes is listed so the whole map validates against the fork spec: fork-shaped
+     * fixtures where the wire differs ([FORK_VTXOS] — the fork's vtxo shape provably drifts
+     * from stock), and the shared constants where the schemas match ([MOVEMENT],
+     * [CREATE_WALLET], [CONNECTED], [TIP]).
      */
     val forkByPath: Map<String, String> = mapOf(
         "/api/v1/wallet/balance" to FORK_BALANCE,
@@ -232,5 +256,8 @@ object BarkdFixtures {
         "/api/v1/wallet/addresses/next" to FORK_NEXT_ADDRESS,
         "/api/v1/lightning/channels" to FORK_CHANNELS,
         "/api/v1/lightning/channels/balance" to FORK_CHANNELS_BALANCE,
+        "/api/v1/wallet/vtxos" to FORK_VTXOS,
+        "/api/v1/wallet/connected" to CONNECTED,
+        "/api/v1/bitcoin/tip" to TIP,
     )
 }

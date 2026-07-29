@@ -952,8 +952,9 @@ class AppStateMachineChannelsTest {
         core.channelsFlow.value = TWO_CHANNELS
         runCurrent()
         with(m.model.value.channels) {
-            // The bridge total is the snapshot's totalLocalSat (msat-truncated upstream), not a re-sum.
-            assertEquals("2 channels · ₿169,999", bridgeValue)
+            // R7: the bridge total is the sum of the visible rows (the daemon's usable-only
+            // totalLocalSat of 169,999 is deliberately NOT what renders).
+            assertEquals("2 channels · ₿170,000", bridgeValue)
             assertEquals(2, rows.size)
             assertEquals("1230abc…f00d456", rows[0].shortId)
             assertEquals("₿120,000 of ₿200,000 · usable", rows[0].value)
@@ -1000,7 +1001,7 @@ class AppStateMachineChannelsTest {
             assertEquals("block 918,402 · in 27 days", rows[0].expiryLabel)
         }
         m.toggleBalance()
-        assertEquals("2 channels · ₿169,999", m.model.value.channels.bridgeValue)
+        assertEquals("2 channels · ₿170,000", m.model.value.channels.bridgeValue)
     }
 
     @Test

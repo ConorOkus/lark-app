@@ -333,7 +333,7 @@ class BarkdApiTest {
     @Test
     fun forkArkInfoWithSupportsChannelsAndNoFeesDecodes() = runTest {
         val info = forkApi(forkFixtureEngine()).arkInfo().okValue()
-        assertEquals("mutinynet", info.network)
+        assertEquals("signet", info.network)
         assertEquals(12_960, info.vtxoExpiryDelta)
         assertEquals(true, info.supportsChannels)
     }
