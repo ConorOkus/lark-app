@@ -4,10 +4,12 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import xyz.lark.app.core.model.ChannelState
 import xyz.lark.app.core.model.HealthState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -184,6 +186,96 @@ class GatewayLarkCoreForkTest {
 
         assertEquals(HealthState.OFFLINE, core.health.value)
         assertEquals(GatewayOfflineReason.NETWORK_MISMATCH, core.offlineReason.value)
+    }
+
+    // --- Channels snapshot (plan U4) ---
+
+    @Test
+    fun forkPollCycleWithTwoChannelsPopulatesTheChannelsSnapshot() = runTest {
+        val script = forkScript()
+        val usable = channelJson(
+            channelId = "741e8bd3".repeat(8),
+            localMsat = 300_000_000L,
+            capacitySat = 1_000_000L,
+            expiryHeight = 916_214L + 144L,
+        )
+        val opening = channelJson(
+            channelId = "9a9a9a9a",
+            localMsat = 200_000_000L,
+            capacitySat = 500_000L,
+            isUsable = false,
+            isChannelReady = false,
+        )
+        script.sticky(Paths.CHANNELS, BarkdScript.Json("[$usable, $opening]"))
+        script.sticky(Paths.CHANNELS_BALANCE, BarkdScript.Json("""{"balance_sat": 500000}"""))
+        val core = settledForkCore(script)
+
+        val snapshot = assertNotNull(core.channels.value, "a successful poll must populate the snapshot")
+        assertEquals(2, snapshot.channels.size)
+        assertEquals(500_000L, snapshot.totalLocalSat, "the bridge total is the gateway's channels/balance figure")
+        assertEquals(snapshot.totalLocalSat, snapshot.channels.sumOf { it.localSat })
+        val first = snapshot.channels[0]
+        assertEquals("741e8bd3…8bd3", first.shortId)
+        assertEquals(300_000L, first.localSat)
+        assertEquals(1_000_000L, first.capacitySat)
+        assertEquals(ChannelState.USABLE, first.state)
+        assertEquals("block 916,358 · in 1 day", first.expiryLabel, "countdown against the tip the harness serves")
+        val second = snapshot.channels[1]
+        assertEquals(ChannelState.OPENING, second.state, "not-ready reads as still opening")
+        assertEquals("—", second.expiryLabel, "no expiry height: em-dash, never a fake countdown")
+    }
+
+    @Test
+    fun forkChannelsSnapshotIsNullBeforeTheFirstPollAndEmptyAfterAZeroChannelPoll() = runTest {
+        val script = forkScript()
+        script.sticky(Paths.CHANNELS, BarkdScript.Json("[]"))
+        script.sticky(Paths.CHANNELS_BALANCE, BarkdScript.Json("""{"balance_sat": 0}"""))
+        val core = forkCore(script)
+        assertNull(core.channels.value, "never fetched reads as null, not as zero channels")
+        runCurrent()
+        assertNull(core.channels.value, "no wallet yet: still never fetched")
+
+        core.createWallet()
+        runCurrent()
+        val snapshot = assertNotNull(core.channels.value, "polled-and-zero-channels is non-null")
+        assertTrue(snapshot.channels.isEmpty())
+        assertEquals(0L, snapshot.totalLocalSat)
+    }
+
+    @Test
+    fun forkChannelFetchFailureKeepsHealthAndThePreviousSnapshot() = runTest {
+        val script = forkScript()
+        val serverError = BarkdScript.Json("""{"message": "boom"}""", HttpStatusCode.InternalServerError)
+        script.sticky(Paths.CHANNELS, serverError)
+        val core = settledForkCore(script)
+
+        assertNull(core.channels.value, "a failed fetch never fakes an empty snapshot")
+        assertEquals(HealthState.READY, core.health.value, "channel data is auxiliary, not liveness")
+
+        // Let one cycle succeed (the fork default serves one opening channel), then break it again.
+        script.clearSticky(Paths.CHANNELS)
+        advanceThrough(15.seconds)
+        val populated = assertNotNull(core.channels.value)
+        assertEquals(1, populated.channels.size)
+
+        script.sticky(Paths.CHANNELS, serverError)
+        script.sticky(Paths.CHANNELS_BALANCE, serverError)
+        advanceThrough(45.seconds)
+        assertEquals(populated, core.channels.value, "failed cycles keep the last good snapshot")
+        assertEquals(HealthState.READY, core.health.value, "even a 5xx streak on channels never flips health")
+    }
+
+    @Test
+    fun stockVariantKeepsTheChannelsSnapshotNullAndNeverCallsChannelEndpoints() = runTest {
+        val script = BarkdScript()
+        val core = gatewayCore(barkdEngine(script))
+        runCurrent()
+        advanceThrough(45.seconds)
+
+        assertNull(core.channels.value, "stock has no channel surface: forever never-fetched")
+        assertEquals(HealthState.READY, core.health.value)
+        assertEquals(0, script.countOf(Paths.CHANNELS), "the stock core must never request channel paths")
+        assertEquals(0, script.countOf(Paths.CHANNELS_BALANCE))
     }
 
     // --- networkLabel decoupling (R5: mutinynet identifies as signet on the wire) ---

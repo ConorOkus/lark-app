@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.model.AdvancedStats
+import xyz.lark.app.core.model.ChannelsSnapshot
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.FiatRate
 import xyz.lark.app.core.model.FundsStats
@@ -144,6 +145,7 @@ class GatewayLarkCore(
     private val healthFlow = MutableStateFlow(HealthState.READY)
     private val backedUpFlow = MutableStateFlow(false)
     private val offlineReasonFlow = MutableStateFlow<GatewayOfflineReason?>(null)
+    private val channelsFlow = MutableStateFlow<ChannelsSnapshot?>(null)
 
     /** Serializes poll cycles (loop, refresh, notification-triggered) against each other. */
     private val pollMutex = Mutex()
@@ -175,6 +177,9 @@ class GatewayLarkCore(
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
     override val health: StateFlow<HealthState> = healthFlow.asStateFlow()
     override val backedUp: StateFlow<Boolean> = backedUpFlow.asStateFlow()
+
+    /** Null until the first successful channel fetch; forever null on a channel-less surface (U4). */
+    override val channels: StateFlow<ChannelsSnapshot?> = channelsFlow.asStateFlow()
 
     /** Not part of the seam: the status screen may surface why the gateway is offline. */
     val offlineReason: StateFlow<GatewayOfflineReason?> = offlineReasonFlow.asStateFlow()
@@ -417,6 +422,21 @@ class GatewayLarkCore(
         cycle.note(api.tip())?.let { tipHeight = it.tipHeight }
         cycle.note(api.connected())?.let { cycle.disconnected = !it.connected }
         fetchReceiveTargetsIfNeeded(cycle)
+        fetchChannelsState() // after the tip fetch: expiry labels count down against this cycle's tip
+    }
+
+    /**
+     * Channel data is auxiliary, not liveness (plan U4): fetch failures deliberately bypass
+     * [CycleOutcome.note] and leave the snapshot at its previous value — null while never
+     * fetched, the last good snapshot afterwards. A successful fetch of zero channels emits
+     * a non-null empty snapshot: polled-and-zero, distinct from never-fetched.
+     */
+    private suspend fun fetchChannelsState() {
+        if (!api.capabilities.hasChannels) return
+        val channelList = (api.channels() as? BarkdResult.Ok)?.value ?: return
+        (api.channelsBalance() as? BarkdResult.Ok)?.let { total ->
+            channelsFlow.value = channelsSnapshot(channelList, total.value.balanceSat, tipHeight)
+        }
     }
 
     private fun applyHistory(movements: List<Movement>) {

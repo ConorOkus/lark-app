@@ -21,6 +21,13 @@ class FakeLarkCoreTest {
 
     private fun core() = FakeLarkCore()
 
+    // --- Channels (plan U4: the demo has none) ---
+
+    @Test
+    fun channelsSnapshotStaysNullOnTheDemoCore() = runTest {
+        assertNull(core().channels.value, "the demo core keeps the seam's never-fetched null forever")
+    }
+
     // --- Send (offline + concurrency + timing; the guard set lives in the contract suite) ---
 
     @Test

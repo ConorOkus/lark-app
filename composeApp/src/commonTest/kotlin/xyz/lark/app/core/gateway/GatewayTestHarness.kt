@@ -46,6 +46,8 @@ internal object Paths {
     const val TIP = "/api/v1/bitcoin/tip"
     const val ARK_INFO = "/api/v1/wallet/ark-info"
     const val NEXT_ADDRESS = "/api/v1/wallet/addresses/next"
+    const val CHANNELS = "/api/v1/lightning/channels"
+    const val CHANNELS_BALANCE = "/api/v1/lightning/channels/balance"
 }
 
 /** Spec fixtures adjusted so the default script describes a healthy mutinynet wallet. */
@@ -200,6 +202,31 @@ internal fun BarkdScript.requests(path: String): List<HttpRequestData> = seen.fi
 
 internal suspend fun BarkdScript.bodyOf(path: String, index: Int = 0): String =
     requests(path)[index].body.toByteArray().decodeToString()
+
+/** A fork-spec-shaped channel JSON for channel scripting; only the fields the mapping consumes vary. */
+@Suppress("LongParameterList") // fixture builder: each parameter is one independent wire field
+internal fun channelJson(
+    channelId: String,
+    localMsat: Long,
+    capacitySat: Long = 1_000_000,
+    isUsable: Boolean = true,
+    isChannelReady: Boolean = true,
+    expiryHeight: Long? = null,
+): String {
+    val expiry = if (expiryHeight == null) "" else """,
+          "expiry_height": $expiryHeight"""
+    return """
+        {
+          "channel_id": "$channelId",
+          "counterparty": "024fb4d3",
+          "capacity_sat": $capacitySat,
+          "local_balance_msat": $localMsat,
+          "is_usable": $isUsable,
+          "is_channel_ready": $isChannelReady,
+          "force_close_spend_delay": 144$expiry
+        }
+    """.trimIndent()
+}
 
 /** A spec-shaped movement JSON for history scripting; only the fields the mapping consumes vary. */
 @Suppress("LongParameterList") // fixture builder: each parameter is one independent wire field
