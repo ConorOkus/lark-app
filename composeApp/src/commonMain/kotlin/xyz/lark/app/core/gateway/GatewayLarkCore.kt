@@ -54,18 +54,30 @@ private val DEFAULT_POLL_INTERVAL = DEFAULT_POLL_INTERVAL_SECONDS.seconds
 private val DEFAULT_OFFLINE_BACKOFF = List(BACKOFF_STEPS) { BACKOFF_START_SECONDS.seconds * (1 shl it) }
 private val DEFAULT_LONG_POLL_RETRY = DEFAULT_LONG_POLL_RETRY_SECONDS.seconds
 
-/** Poll-loop tuning, injectable so virtual-time tests can pin the schedule (KTD-7). */
+/** Poll-loop tuning and wall clock, injectable so virtual-time tests can pin both (KTD-7). */
 data class GatewayTuning(
     val pollInterval: Duration = DEFAULT_POLL_INTERVAL,
     /** Waits between recovery probes while OFFLINE; the schedule caps at its last step. */
     val offlineBackoff: List<Duration> = DEFAULT_OFFLINE_BACKOFF,
     /** Pause before re-issuing `notifications/wait` after a failed or idle long poll. */
     val longPollRetryDelay: Duration = DEFAULT_LONG_POLL_RETRY,
+    /** Wall clock behind the relative display timestamps. */
+    val now: () -> Instant = { Clock.System.now() },
 ) {
     init {
         require(offlineBackoff.isNotEmpty()) { "offlineBackoff needs at least one step" }
     }
 }
+
+/**
+ * Where the fork's wallet create points the daemon ([BarkdCapabilities.usesForkCreateRequest]
+ * requires both): the Ark server (captaind) and the esplora chain source. Never consulted on
+ * the stock surface, whose create carries only the network.
+ */
+data class ForkWalletConfig(
+    val arkServerUrl: String = "",
+    val esploraUrl: String = "",
+)
 
 /** Why the gateway core is reporting [HealthState.OFFLINE]; null while not offline. */
 enum class GatewayOfflineReason {
@@ -81,7 +93,10 @@ enum class GatewayOfflineReason {
     /** barkd is reachable but reports it cannot reach its Ark server (`connected: false`). */
     ARK_DISCONNECTED,
 
-    /** The gateway is on the wrong network (plan R16): hard, non-recoverable. */
+    /**
+     * The gateway failed the R16 identity check — wrong network, or (on the channel fork)
+     * an Ark server without channel support: hard, non-recoverable.
+     */
     NETWORK_MISMATCH,
 }
 
@@ -94,6 +109,13 @@ enum class GatewayOfflineReason {
  * drive OFFLINE (R6). While OFFLINE the poll loop backs off along [GatewayTuning.offlineBackoff]
  * (capped at the last step) with `GET /ping` as the cheap recovery probe. First contact
  * verifies the gateway network against [expectedNetwork]; a mismatch is terminal (R16).
+ *
+ * The fork surface degrades honestly at the [BarkdCapabilities] seams (plan U3), never by
+ * pretending: no notification loop (poll cadence alone), backup words immediately unavailable,
+ * the receive code minted client-side from ONE `addresses/next` address per session (charset-
+ * checked before it may enter a URI), create speaking the fork request shape with wallet
+ * existence learned from create itself (the fork has no `GET /wallet` probe), and the R16
+ * identity check additionally requiring ark-info `supports_channels`.
  *
  * Deliberate M1 seams and stand-ins, all pinned by tests:
  * - `backedUp` is a local flag exactly like the fake — barkd has no backed-up concept.
@@ -111,8 +133,10 @@ class GatewayLarkCore(
     private val api: BarkdApi,
     private val scope: CoroutineScope,
     private val expectedNetwork: String,
+    /** User-facing network name (R12), decoupled from [expectedNetwork] on the wire. */
+    networkLabel: String,
+    private val forkWallet: ForkWalletConfig = ForkWalletConfig(),
     private val tuning: GatewayTuning = GatewayTuning(),
-    private val now: () -> Instant = { Clock.System.now() },
 ) : LarkCore {
 
     private val walletExistsFlow = MutableStateFlow(false)
@@ -160,7 +184,7 @@ class GatewayLarkCore(
     override val recents: List<Contact> get() = recentRows
     override val receiveCode: String get() = receiveCodeCache.orEmpty()
     override val depositAddress: String get() = depositAddressCache.orEmpty()
-    override val networkLabel: String = expectedNetwork
+    override val networkLabel: String = networkLabel
 
     override val backupWords: List<String>
         get() {
@@ -170,7 +194,8 @@ class GatewayLarkCore(
 
     init {
         scope.launch { pollLoop() }
-        scope.launch { notificationLoop() }
+        // No notifications endpoint means no long-poll loop at all: poll cadence alone (U3).
+        if (api.capabilities.hasNotifications) scope.launch { notificationLoop() }
     }
 
     // --- Wallet lifecycle (R5) ---
@@ -191,6 +216,10 @@ class GatewayLarkCore(
 
     private suspend fun createOrAdoptWallet() {
         if (hardOffline || walletExistsFlow.value) return
+        if (api.capabilities.usesForkCreateRequest) {
+            createOrAdoptForkWallet()
+            return
+        }
         if (probeFindsWallet()) {
             adoptWallet() // barkd is single-wallet: an existing wallet is ours to adopt, not an error
         } else {
@@ -202,6 +231,29 @@ class GatewayLarkCore(
             }
         }
     }
+
+    /**
+     * The fork has no wallet-existence probe, so create doubles as the probe on its
+     * single-wallet daemon: a rejected create while a wallet-scoped read answers means the
+     * wallet already exists and is ours to adopt — the same classification the stock path
+     * reaches by re-probing `GET /wallet` after a raced create.
+     */
+    private suspend fun createOrAdoptForkWallet() {
+        when (api.createWallet(forkCreateRequest())) {
+            is BarkdResult.Ok -> adoptWallet()
+            is BarkdResult.HttpError -> if (forkWalletAnswers()) adoptWallet()
+            is BarkdResult.Unreachable -> Unit // the poll loop classifies reachability
+        }
+    }
+
+    private fun forkCreateRequest() = ForkCreateWalletRequest(
+        network = expectedNetwork,
+        arkServer = forkWallet.arkServerUrl,
+        chainSource = ChainSourceConfig(esplora = EsploraChainSource(url = forkWallet.esploraUrl)),
+    )
+
+    /** The fork's existence probe stand-in: a wallet-scoped read only answers once a wallet exists. */
+    private suspend fun forkWalletAnswers(): Boolean = api.balance() is BarkdResult.Ok
 
     private suspend fun probeFindsWallet(): Boolean {
         val probe = api.walletExists()
@@ -216,6 +268,8 @@ class GatewayLarkCore(
     // --- Backup words (R5/R15) ---
 
     private fun requestBackupWordsIfNeeded() {
+        // No mnemonic endpoint = immediately words-unavailable: same empty state as a 404 (U3).
+        if (!api.capabilities.hasMnemonic) return
         if (mnemonicFetchStarted || hardOffline || !walletExistsFlow.value) return
         mnemonicFetchStarted = true
         scope.launch {
@@ -335,13 +389,15 @@ class GatewayLarkCore(
     }
 
     private suspend fun probeWallet(cycle: CycleOutcome) {
+        // The fork surface has no `GET /wallet`: existence is only ever learned from create.
+        if (api.capabilities.usesForkCreateRequest) return
         cycle.note(api.walletExists())?.let { walletExistsFlow.value = it.fingerprint != null }
     }
 
-    /** R16: first successful contact must confirm the gateway chain; a mismatch is terminal. */
+    /** R16: first successful contact must confirm the gateway identity; a mismatch is terminal. */
     private suspend fun verifyNetwork(cycle: CycleOutcome) {
         val info = cycle.note(api.arkInfo()) ?: return
-        if (info.network == expectedNetwork) {
+        if (info.network == expectedNetwork && channelSupportMatches(info)) {
             cachedArkInfo = info
             networkVerified = true
         } else {
@@ -349,6 +405,10 @@ class GatewayLarkCore(
             goOffline(GatewayOfflineReason.NETWORK_MISMATCH)
         }
     }
+
+    /** The channel surface must land on an Ark server that opens channels (R16 identity, U3). */
+    private fun channelSupportMatches(info: ArkInfo): Boolean =
+        !api.capabilities.hasChannels || info.supportsChannels == true
 
     private suspend fun fetchWalletState(cycle: CycleOutcome) {
         cycle.note(api.balance())?.let { balanceFlow.value = it.spendableSat } // the one-balance rule
@@ -361,12 +421,18 @@ class GatewayLarkCore(
 
     private fun applyHistory(movements: List<Movement>) {
         val ordered = movementsNewestFirst(movements)
-        activityRows = activityFromMovements(ordered, now())
+        activityRows = activityFromMovements(ordered, tuning.now())
         recentRows = recentsFromMovements(ordered)
     }
 
     /** The receive code and deposit address are stable per wallet: fetched once per session. */
     private suspend fun fetchReceiveTargetsIfNeeded(cycle: CycleOutcome) {
+        if (!api.capabilities.hasBip321) {
+            // No bip321 endpoint also means no onchain URI source: the deposit address
+            // honestly stays absent (em-dash on Advanced), never a fabricated string.
+            mintReceiveAddressIfNeeded(cycle)
+            return
+        }
         if (receiveCodeCache == null) {
             cycle.note(api.bip321(Bip321UriRequest()))?.let { receiveCodeCache = it.bip321 }
         }
@@ -374,6 +440,20 @@ class GatewayLarkCore(
             cycle.note(api.bip321(Bip321UriRequest(onchain = true)))?.let {
                 depositAddressCache = it.onchain.orEmpty()
             }
+        }
+    }
+
+    /**
+     * Fork receive (U3): mints ONE address per session via `addresses/next` and builds the
+     * `bitcoin:?ark=` URI client-side ([arkReceiveUri]). An address failing the charset check
+     * is never embedded: the empty string caches the no-receive-code state so the session
+     * neither shows a broken URI nor mints a fresh address on the daemon every cycle. Fetch
+     * failures leave the cache null and retry next cycle, exactly like the bip321 path.
+     */
+    private suspend fun mintReceiveAddressIfNeeded(cycle: CycleOutcome) {
+        if (receiveCodeCache != null) return
+        cycle.note(api.nextAddress())?.let { minted ->
+            receiveCodeCache = arkReceiveUri(minted.address).orEmpty()
         }
     }
 

@@ -319,7 +319,7 @@ class BarkdApiTest {
     @Test
     fun nextAddressPostsAndDecodesAddress() = runTest {
         val engine = forkFixtureEngine()
-        assertEquals("ark1qforknext", forkApi(engine).nextAddress().okValue().address)
+        assertEquals("ark1qf2knext", forkApi(engine).nextAddress().okValue().address)
         assertEquals(HttpMethod.Post to "/api/v1/wallet/addresses/next", engine.singleRequestLine())
     }
 

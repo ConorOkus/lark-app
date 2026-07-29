@@ -45,6 +45,7 @@ internal object Paths {
     const val CONNECTED = "/api/v1/wallet/connected"
     const val TIP = "/api/v1/bitcoin/tip"
     const val ARK_INFO = "/api/v1/wallet/ark-info"
+    const val NEXT_ADDRESS = "/api/v1/wallet/addresses/next"
 }
 
 /** Spec fixtures adjusted so the default script describes a healthy mutinynet wallet. */
@@ -60,11 +61,14 @@ internal object HealthyFixtures {
 
 /**
  * Scriptable barkd responses per path: queued one-shots are served first, then the sticky
- * override, then the healthy default fixture. The default script is a reachable mutinynet
- * gateway with an existing wallet; `notifications/wait` fails by default so the long-poll
- * loop's cadence stays purely virtual-time-driven.
+ * override, then the surface's default fixture ([stockDefaults] unless the test passes
+ * [forkDefaults]). The stock default script is a reachable mutinynet gateway with an
+ * existing wallet; `notifications/wait` fails by default so the long-poll loop's cadence
+ * stays purely virtual-time-driven.
  */
-internal class BarkdScript {
+internal class BarkdScript(
+    private val defaults: Map<String, Reply> = stockDefaults,
+) {
 
     sealed interface Reply
     data class Json(val body: String, val status: HttpStatusCode = HttpStatusCode.OK) : Reply
@@ -98,13 +102,30 @@ internal class BarkdScript {
             ?: stickyReplies[path]
             ?: defaults.getValue(path) // unknown path = the test scripted the wrong endpoint
 
-    private companion object {
-        val defaults: Map<String, Reply> = buildMap {
+    companion object {
+        /** A reachable stock-0.4.0 mutinynet gateway with an existing wallet. */
+        val stockDefaults: Map<String, Reply> = buildMap {
             BarkdFixtures.byPath.forEach { (path, body) -> put(path, Json(body)) }
             put(Paths.VTXOS, Json(HealthyFixtures.VTXOS_FAR_EXPIRY))
             put(Paths.ARK_INFO, Json(HealthyFixtures.ARK_INFO_MUTINYNET))
             put(Paths.PING, Text("pong"))
             put(Paths.WAIT, Broken("long-poll idle"))
+        }
+
+        /**
+         * The fork twin (0.1.0-beta.6): the stock defaults minus the endpoints the fork lacks
+         * (wallet probe, bip321, mnemonic, notifications, stock history route) plus the fork
+         * fixtures. A request to a removed endpoint finds no default and reads as unreachable;
+         * the fork tests additionally assert the request log to prove it never happens.
+         */
+        val forkDefaults: Map<String, Reply> = buildMap {
+            putAll(stockDefaults)
+            remove(Paths.WALLET)
+            remove(Paths.BIP321)
+            remove(Paths.MNEMONIC)
+            remove(Paths.WAIT)
+            remove(Paths.HISTORY)
+            BarkdFixtures.forkByPath.forEach { (path, body) -> put(path, Json(body)) }
         }
     }
 }
@@ -138,22 +159,33 @@ private suspend fun MockRequestHandleScope.perform(reply: BarkdScript.Reply): Ht
     }
 }
 
+/** Fork wallet-create wiring every harness core carries; fork tests pin these in the create body. */
+internal val FORK_WALLET = ForkWalletConfig(
+    arkServerUrl = "http://captaind.test:3535",
+    esploraUrl = "http://esplora.test:3003",
+)
+
+@Suppress("LongParameterList") // harness builder: each parameter is one independent test knob
 internal fun TestScope.gatewayCore(
     engine: MockEngine,
+    variant: BarkdApiVariant = BarkdApiVariant.STOCK_0_4,
     expectedNetwork: String = "mutinynet",
+    networkLabel: String = expectedNetwork,
     pollInterval: Duration = 15.seconds,
     backoff: List<Duration> = listOf(1.seconds, 2.seconds, 4.seconds),
     scope: CoroutineScope = backgroundScope,
 ): GatewayLarkCore = GatewayLarkCore(
-    api = BarkdApi(engine, GATEWAY_BASE_URL),
+    api = BarkdApi(engine, GATEWAY_BASE_URL, variant = variant),
     scope = scope,
     expectedNetwork = expectedNetwork,
+    networkLabel = networkLabel,
+    forkWallet = FORK_WALLET,
     tuning = GatewayTuning(
         pollInterval = pollInterval,
         offlineBackoff = backoff,
         longPollRetryDelay = 10.seconds,
+        now = { FIXED_NOW },
     ),
-    now = { FIXED_NOW },
 )
 
 /** Advances virtual time by [duration] and runs the tasks that land exactly on the new mark. */

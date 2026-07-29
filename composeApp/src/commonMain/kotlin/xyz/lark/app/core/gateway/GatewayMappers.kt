@@ -85,6 +85,22 @@ private fun bip321OffchainDestination(uri: String): String? {
 }
 
 /**
+ * The fork receive URI (plan U3): the fork has no bip321 endpoint, so the app embeds the
+ * freshly minted `addresses/next` address in a `bitcoin:?ark=` URI itself. Guarded by a
+ * pragmatic bech32 shape check — a lowercase alphanumeric human-readable part, the `1`
+ * separator, then bech32-charset data — not full bech32m verification: its job is keeping
+ * URI-breaking or plainly non-bech32 strings out of the receive code. Anything failing the
+ * check returns null, the no-receive-code state.
+ */
+internal fun arkReceiveUri(address: String): String? =
+    if (ARK_ADDRESS_SHAPE.matches(address)) "$BIP321_SCHEME?$ARK_PARAM=$address" else null
+
+/** The 32 characters bech32/bech32m data may use (no `1`, `b`, `i`, `o`). */
+private const val BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+private val ARK_ADDRESS_SHAPE = Regex("[a-z][a-z0-9]*1[$BECH32_CHARSET]+")
+
+/**
  * Maps gateway history to activity rows, newest first. Amounts are the movement's signed
  * balance delta: the effective (fee-inclusive) figure once successful, the intended figure
  * while still pending — always what the balance actually saw or will see.

@@ -8,6 +8,7 @@ import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.gateway.BarkdApi
+import xyz.lark.app.core.gateway.ForkWalletConfig
 import xyz.lark.app.core.gateway.GatewayLarkCore
 import xyz.lark.app.core.gateway.httpClientEngine
 import kotlin.time.ExperimentalTime
@@ -18,8 +19,9 @@ internal data class CoreSelection(val core: LarkCore, val demo: DemoControls?)
 /**
  * Builds the configured core (plan U6, R10). DEMO wires the fake as both core and demo
  * controls, exactly as before (AE4). GATEWAY wires [GatewayLarkCore] over the platform HTTP
- * [engine], speaking [CoreConfig.apiVariant]'s barkd surface, with `demo = null`, so the
- * Advanced DEMO rail's existing null-gating hides it.
+ * [engine], speaking [CoreConfig.apiVariant]'s barkd surface — labelled [CoreConfig.networkLabel]
+ * in the UI and carrying the fork's create pointers — with `demo = null`, so the Advanced
+ * DEMO rail's existing null-gating hides it.
  * Non-default parameters exist for tests; production callers pass only mode and scope.
  */
 @OptIn(ExperimentalTime::class) // GatewayLarkCore's injectable clock (kotlin.time, stable enough for M1)
@@ -36,6 +38,11 @@ internal fun buildCore(
             api = BarkdApi(engine(), gatewayBaseUrl, variant = CoreConfig.apiVariant),
             scope = scope,
             expectedNetwork = expectedNetwork,
+            networkLabel = CoreConfig.networkLabel,
+            forkWallet = ForkWalletConfig(
+                arkServerUrl = CoreConfig.arkServerUrl,
+                esploraUrl = CoreConfig.chainSource,
+            ),
         ),
         demo = null,
     )

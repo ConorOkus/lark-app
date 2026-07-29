@@ -158,7 +158,9 @@ object BarkdFixtures {
 
     const val FORK_CHANNELS_BALANCE = """{"balance_sat": 500000}"""
 
-    const val FORK_NEXT_ADDRESS = """{"address": "ark1qforknext"}"""
+    // The address value stays within the bech32 charset: the app's fork receive path
+    // validates it before embedding, and a healthy fixture must survive that check.
+    const val FORK_NEXT_ADDRESS = """{"address": "ark1qf2knext"}"""
 
     // The fork sends an explicit `"pending_exit_sat": null` when the exit subsystem is down.
     val FORK_BALANCE = """
