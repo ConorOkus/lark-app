@@ -113,6 +113,9 @@ data class DemoHealthOption(
  *
  * [sentAmount] is the amount snapshotted when the send was confirmed — the sent screen renders
  * it (not the live keypad) so keypad edits after confirming can't alter the message.
+ *
+ * [exitAmount] is the full balance in the primary denomination, never masked: the exit screen
+ * states what will move on-chain even while the home balance is hidden.
  */
 data class AppModel(
     val route: Route,
@@ -120,6 +123,7 @@ data class AppModel(
     val screenLabel: String,
     val denomination: Denomination,
     val balance: BalanceModel,
+    val exitAmount: String,
     val health: HealthModel,
     val keypad: KeypadModel,
     val send: SendModel,

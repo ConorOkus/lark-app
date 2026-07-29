@@ -65,8 +65,9 @@ interface LarkCore {
 
     /**
      * Sends [sats] to [recipient]. The working delay lives here, inside the core —
-     * callers show the sending spinner and simply await the result. Fails when offline;
-     * the balance is untouched on failure.
+     * callers show the sending spinner and simply await the result. Fails when offline,
+     * when [sats] is not positive, or when [sats] exceeds the balance; the balance is
+     * untouched on failure. Concurrent sends are serialized at this boundary.
      */
     suspend fun send(recipient: String, sats: Long): SendResult
 }

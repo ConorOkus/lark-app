@@ -4,6 +4,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import xyz.lark.app.core.model.AdvancedStats
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.FiatRate
@@ -63,6 +65,9 @@ class FakeLarkCore(
     private val healthFlow = MutableStateFlow(HealthState.READY)
     private val backedUpFlow = MutableStateFlow(false)
 
+    /** Serializes [send]'s read-check-debit so racing sends cannot jointly overdraw. */
+    private val sendMutex = Mutex()
+
     override val walletExists: StateFlow<Boolean> = walletExistsFlow.asStateFlow()
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
     override val health: StateFlow<HealthState> = healthFlow.asStateFlow()
@@ -116,9 +121,17 @@ class FakeLarkCore(
 
     override suspend fun send(recipient: String, sats: Long): SendResult {
         delay(workDelay)
-        if (healthFlow.value == HealthState.OFFLINE) return SendResult.Failure
-        balanceFlow.value -= sats
-        return SendResult.Success
+        return sendMutex.withLock {
+            val payable = healthFlow.value != HealthState.OFFLINE &&
+                sats > 0 &&
+                sats <= balanceFlow.value
+            if (payable) {
+                balanceFlow.value -= sats
+                SendResult.Success
+            } else {
+                SendResult.Failure
+            }
+        }
     }
 
     override fun forceHealth(health: HealthState) {
