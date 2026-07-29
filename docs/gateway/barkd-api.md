@@ -5,6 +5,10 @@ vendored at [`barkd-openapi-0.4.0.json`](barkd-openapi-0.4.0.json); the typed cl
 `xyz.lark.app.core.gateway.BarkdApi`, and its test fixtures are string-validated against the
 vendored spec (`BarkdFixtureSpecTest`, plan R14) so drift fails the build.
 
+This documents the **stock** surface (`BarkdApiVariant.STOCK_0_4`). The LARK channel-bridge
+fork speaks an older, partly different surface with a channel API — see
+[`barkd-fork-api.md`](barkd-fork-api.md) (`BarkdApiVariant.FORK_BETA6`).
+
 ## Auth
 
 The API is secured with `Authorization: Bearer <base64url auth token>` (OpenAPI `bearer`
