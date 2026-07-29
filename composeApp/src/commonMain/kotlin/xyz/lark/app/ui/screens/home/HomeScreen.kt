@@ -37,12 +37,10 @@ private val ChipHorizontalPadding = 10.dp
 private val ChipVerticalPadding = 7.dp
 private val ChipGap = 7.dp
 private val HealthDotSize = 7.dp
-private val BalanceLabelGap = 14.dp
 private val SecondaryGap = 12.dp
 private val HideRowGap = 18.dp
 private val HideRowHeight = 44.dp
 
-private const val BALANCE_LABEL_ALPHA = 0.42f
 private const val HIDE_LABEL_ALPHA = 0.4f
 
 /**
@@ -146,12 +144,6 @@ private fun BalanceBlock(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.Start,
     ) {
-        Text(
-            text = "Balance",
-            style = LarkTheme.typography.itemTitle.copy(fontSize = 15.sp, lineHeight = 15.sp),
-            color = LarkColors.TextPrimary.copy(alpha = BALANCE_LABEL_ALPHA),
-        )
-        Spacer(modifier = Modifier.height(BalanceLabelGap))
         BalanceAmounts(balance = balance, onToggleUnit = onToggleUnit)
         Spacer(modifier = Modifier.height(HideRowGap))
         HideShowRow(label = balance.hideLabel, onClick = onToggleBalance)
