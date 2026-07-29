@@ -214,6 +214,25 @@ class GatewayLarkCoreHealthTest {
     }
 
     @Test
+    fun cancelledRefreshDoesNotWedgeHealthAtTidying() = runTest {
+        val script = BarkdScript()
+        script.sticky(Paths.REFRESH, BarkdScript.Slow(1_000, BarkdScript.Json(BarkdFixtures.PENDING_ROUND)))
+        val core = gatewayCore(barkdEngine(script))
+        runCurrent()
+
+        val refreshing = launch { core.refresh() }
+        advanceThrough(500.milliseconds) // mid-flight: the refresh POST is still pending
+        assertEquals(HealthState.TIDYING, core.health.value)
+
+        refreshing.cancel()
+        runCurrent()
+        assertTrue(refreshing.isCancelled)
+
+        advanceThrough(15.seconds) // next scheduled poll cycle recomputes health
+        assertEquals(HealthState.READY, core.health.value, "cancelled refresh must not pin TIDYING")
+    }
+
+    @Test
     fun pollingStopsWhenTheScopeIsCancelled() = runTest {
         val script = BarkdScript()
         val loopScope = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())

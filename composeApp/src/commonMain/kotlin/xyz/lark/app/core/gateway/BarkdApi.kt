@@ -105,7 +105,12 @@ class BarkdApi(
     suspend fun waitNotifications(since: String? = null): BarkdResult<WaitNotificationResponse> =
         call(HttpMethod.Get, "/api/v1/notifications/wait") {
             parameter("since", since)
-            timeout { requestTimeoutMillis = LONG_POLL_TIMEOUT_MILLIS }
+            timeout {
+                requestTimeoutMillis = LONG_POLL_TIMEOUT_MILLIS
+                // Ktor fills unset per-request fields from the plugin config, so the client-wide
+                // 35s socket timeout would otherwise kill an idle long poll mid-window.
+                socketTimeoutMillis = LONG_POLL_TIMEOUT_MILLIS
+            }
         }
 
     suspend fun connected(): BarkdResult<ConnectedResponse> =

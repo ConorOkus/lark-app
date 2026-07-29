@@ -3,9 +3,10 @@ package xyz.lark.app.core.gateway
 /**
  * Wire fixtures derived from the vendored barkd spec (docs/gateway/barkd-openapi-0.4.0.json).
  *
- * Every JSON key used here (except the schemaless `metadata` subtree) is validated against
- * the vendored spec text by `BarkdFixtureSpecTest` (JVM), so fixture drift fails the build
- * instead of silently green-lighting a wrong DTO (plan R14).
+ * Every fixture is validated by `BarkdFixtureSpecTest` (JVM) against its own endpoint's
+ * response schema in the vendored spec — keys must belong to that schema (the schemaless
+ * `metadata` subtree aside) and schema-required properties must be present — so fixture
+ * drift fails the build instead of silently green-lighting a wrong DTO (plan R14).
  */
 object BarkdFixtures {
 
@@ -104,12 +105,34 @@ object BarkdFixtures {
 
     const val TIP = """{"tip_height": 916214}"""
 
+    // Carries every ArkInfo property the spec marks required, so the fixture stays a
+    // spec-valid response even though the app only decodes the network and the deltas.
     val ARK_INFO = """
         {
           "network": "signet",
+          "server_pubkey": "02cc",
+          "mailbox_pubkey": "02dd",
           "round_interval": "30s",
+          "nb_round_nonces": 64,
+          "vtxo_exit_delta": 12,
           "vtxo_expiry_delta": 12960,
-          "vtxo_exit_delta": 12
+          "htlc_send_expiry_delta": 144,
+          "htlc_expiry_delta": 40,
+          "max_vtxo_amount": 100000000,
+          "required_board_confirmations": 3,
+          "max_user_invoice_cltv_delta": 1000,
+          "min_board_amount_sat": 1000,
+          "offboard_feerate_sat_per_kvb": 1250,
+          "ln_receive_anti_dos_required": false,
+          "fees": {
+            "board": {"min_fee_sat": 0, "base_fee_sat": 0, "ppm": 0},
+            "offboard": {"base_fee_sat": 0, "fixed_additional_vb": 0, "ppm_expiry_table": []},
+            "refresh": {"base_fee_sat": 0, "ppm_expiry_table": []},
+            "lightning_receive": {"base_fee_sat": 0, "ppm": 0},
+            "lightning_send": {"min_fee_sat": 0, "base_fee_sat": 0, "ppm_expiry_table": []}
+          },
+          "max_vtxo_exit_depth": 12,
+          "max_offboard_inputs": 100
         }
     """.trimIndent()
 

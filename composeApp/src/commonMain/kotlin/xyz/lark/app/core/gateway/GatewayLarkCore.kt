@@ -257,9 +257,14 @@ class GatewayLarkCore(
         if (healthFlow.value != HealthState.OFFLINE) healthFlow.value = HealthState.TIDYING
         // Round completion isn't otherwise observable in the 0.4.0 surface; TIDYING presents
         // as Ready anyway (design rule), so it holds for the call and the follow-up cycle settles it.
-        api.refreshAll()
-        refreshInFlight = false
-        runPollCycle()
+        try {
+            // BarkdApi rethrows CancellationException, so a cancelled refresh() must still
+            // reset the flag or health wedges at TIDYING (markReachable recomputes from it).
+            api.refreshAll()
+        } finally {
+            refreshInFlight = false
+        }
+        runPollCycle() // skipped when cancelled above: the cancellation propagates out of the finally
     }
 
     // --- Advanced stats (R9) ---
@@ -355,8 +360,9 @@ class GatewayLarkCore(
     }
 
     private fun applyHistory(movements: List<Movement>) {
-        activityRows = activityFromMovements(movements, now())
-        recentRows = recentsFromMovements(movements)
+        val ordered = movementsNewestFirst(movements)
+        activityRows = activityFromMovements(ordered, now())
+        recentRows = recentsFromMovements(ordered)
     }
 
     /** The receive code and deposit address are stable per wallet: fetched once per session. */
