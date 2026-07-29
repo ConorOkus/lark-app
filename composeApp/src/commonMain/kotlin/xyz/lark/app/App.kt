@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import xyz.lark.app.core.FakeLarkCore
+import xyz.lark.app.core.CoreConfig
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.Route
@@ -40,16 +40,17 @@ import xyz.lark.app.ui.screens.settings.SettingsScreen
 import xyz.lark.app.ui.theme.LarkTheme
 
 /**
- * The app-scoped object graph: the demo engine and the app-wide state machine (the single place
- * a real core slots in later). A top-level lazy singleton so it survives recomposition and
- * Android configuration changes (rotation must not reset the app to onboarding); first touch
- * happens on the main thread inside composition, so [Dispatchers.Main] is available. Cold launch
- * (fresh process) still starts at the resting route.
+ * The app-scoped object graph: the [CoreConfig]-selected core and the app-wide state machine.
+ * A top-level lazy singleton so it survives recomposition and Android configuration changes
+ * (rotation must not reset the app to onboarding); first touch happens on the main thread
+ * inside composition, so [Dispatchers.Main] is available. Cold launch (fresh process) still
+ * starts at the resting route.
  */
 private object AppGraph {
-    val core: FakeLarkCore by lazy { FakeLarkCore() }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val selection: CoreSelection by lazy { buildCore(mode = CoreConfig.mode, scope = scope) }
     val machine: AppStateMachine by lazy {
-        AppStateMachine(core = core, demo = core, scope = CoroutineScope(SupervisorJob() + Dispatchers.Main))
+        AppStateMachine(core = selection.core, demo = selection.demo, scope = scope)
     }
 }
 

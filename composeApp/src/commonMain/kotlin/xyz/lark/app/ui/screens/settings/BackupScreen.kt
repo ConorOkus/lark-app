@@ -85,14 +85,19 @@ fun BackupScreen(
             style = LarkTheme.typography.body,
             color = LarkColors.TextPrimary.copy(alpha = SUBTITLE_ALPHA),
         )
-        Box(modifier = Modifier.padding(top = GridTopGap)) {
-            WordGrid(words = backup.words)
-            if (!backup.revealed) {
-                RevealScrim(onReveal = onReveal, modifier = Modifier.matchParentSize())
+        val wordsAvailable = backup.words.isNotEmpty()
+        if (wordsAvailable) {
+            Box(modifier = Modifier.padding(top = GridTopGap)) {
+                WordGrid(words = backup.words)
+                if (!backup.revealed) {
+                    RevealScrim(onReveal = onReveal, modifier = Modifier.matchParentSize())
+                }
             }
+        } else {
+            WordsUnavailableNotice(modifier = Modifier.padding(top = GridTopGap))
         }
         Spacer(modifier = Modifier.weight(1f))
-        if (backup.revealed) {
+        if (wordsAvailable && backup.revealed) {
             Text(
                 text = "Hides itself in ${backup.countdown} seconds.",
                 style = LarkTheme.typography.bodySmall,
@@ -105,6 +110,26 @@ fun BackupScreen(
             text = "I've written them down",
             onClick = onDone,
             modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * The words-unavailable state (plan R5, U6's named above-seam touch): the gateway answered 404
+ * on the mnemonic — `--expose-mnemonic` is off — so there is no grid and nothing to reveal.
+ */
+@Composable
+private fun WordsUnavailableNotice(modifier: Modifier = Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(GridGap)) {
+        Text(
+            text = "Backup words aren't available from this gateway.",
+            style = LarkTheme.typography.body,
+            color = LarkColors.TextPrimary,
+        )
+        Text(
+            text = "The gateway must run with mnemonic exposure enabled.",
+            style = LarkTheme.typography.body,
+            color = LarkColors.TextPrimary.copy(alpha = SUBTITLE_ALPHA),
         )
     }
 }
