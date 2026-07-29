@@ -3,6 +3,7 @@ package xyz.lark.app.state
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -27,14 +28,20 @@ import kotlin.test.assertTrue
 /** Types each digit of [digits] on the keypad. */
 private fun AppStateMachine.type(digits: String) = digits.forEach { keyPress(it) }
 
-/** A machine driven by the test's background scope, so virtual time controls all timing. */
+/**
+ * A machine driven by the test's background scope, so virtual time controls all timing.
+ * The wall clock defaults to the test scheduler's virtual time; pass [nowMillis] to move
+ * the clock independently of the tick coroutines (simulating app suspension).
+ */
 private fun TestScope.machine(
     core: FakeLarkCore = FakeLarkCore(startWithWallet = true),
     withDemo: Boolean = true,
+    nowMillis: (() -> Long)? = null,
 ): AppStateMachine = AppStateMachine(
     core = core,
     demo = if (withDemo) core else null,
     scope = backgroundScope,
+    nowMillis = nowMillis ?: { testScheduler.currentTime },
 )
 
 /** Navigation, onboarding, balance, and keypad behavior. */
@@ -206,6 +213,18 @@ class AppStateMachineTest {
         m.toggleBalance()
         assertTrue(m.model.value.balance.visible)
         assertEquals("₿412,350", m.model.value.balance.primary)
+    }
+
+    @Test
+    fun exitAmountStaysUnmaskedWhenTheBalanceIsHidden() = runTest {
+        // Issue #4: the exit screen's Amount row always shows the real amount (design parity).
+        val m = machine()
+        m.toggleBalance()
+        assertEquals("••••", m.model.value.balance.primary)
+        assertEquals("₿412,350", m.model.value.exitAmount)
+        m.toggleUnit()
+        assertEquals("$412.35", m.model.value.exitAmount)
+        assertEquals("••••", m.model.value.balance.primary)
     }
 
     // --- Keypad ---
@@ -517,10 +536,46 @@ class AppStateMachineFlowsTest {
         assertEquals(Route.REVIEW, m.model.value.route)
         with(m.model.value) {
             assertEquals("Ferry Building Coffee", send.recipientName)
-            assertEquals("520", keypad.digits)
             assertEquals("₿520", keypad.amountDisplay)
+            assertEquals("$0.52", keypad.amountSecondary)
             assertEquals(KeypadMode.SEND, keypad.mode)
         }
+    }
+
+    @Test
+    fun fiatModeScanSendsExactlyTheScannedSats() = runTest {
+        // Issue #5: the invoice amount is 520 sats, not 520 keypad digits (= cents in fiat mode).
+        val core = FakeLarkCore(startWithWallet = true)
+        val m = machine(core = core)
+        m.toggleUnit() // FIAT
+        m.push(Route.SCAN)
+        m.scanFound()
+        with(m.model.value.keypad) {
+            assertEquals("$0.52", amountDisplay)
+            assertEquals("₿520", amountSecondary)
+        }
+        m.confirmSend()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(Route.SENT, m.model.value.route)
+        assertEquals(412_350L - 520L, core.balanceSats.value) // exactly 520 sats, not 5,200
+        assertEquals("$0.52", m.model.value.sentAmount)
+    }
+
+    @Test
+    fun manualKeypadEntryAfterAScanClearsTheScannedAmount() = runTest {
+        val core = FakeLarkCore(startWithWallet = true)
+        val m = machine(core = core)
+        m.push(Route.SCAN)
+        m.scanFound()
+        m.goSendAmount() // entering the keypad manually discards the scanned amount
+        m.type("42")
+        assertEquals("₿42", m.model.value.keypad.amountDisplay)
+        m.keypadConfirm()
+        m.confirmSend()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(412_350L - 42L, core.balanceSats.value)
     }
 
     // --- Health model (AE5) ---
@@ -638,6 +693,54 @@ class AppStateMachineFlowsTest {
         assertTrue(m.model.value.backup.backedUp)
         assertEquals("Done", m.model.value.backup.statusLabel)
         assertTrue(core.backedUp.value)
+    }
+
+    @Test
+    fun countdownDerivesFromTheInjectedClockNotTheTickCount() = runTest {
+        // Issue #2: wall-clock suspension must not extend the reveal window. The clock jumps
+        // 45s while only one tick runs — the countdown must reflect the clock, not the ticks.
+        var now = 0L
+        val m = machine(nowMillis = { now })
+        m.push(Route.BACKUP)
+        m.revealWords()
+        now = 45_000L // the app was suspended: real time passed with no ticks running
+        advanceTimeBy(1_000) // first tick after resume
+        runCurrent()
+        assertTrue(m.model.value.backup.revealed)
+        assertEquals(15, m.model.value.backup.countdown)
+    }
+
+    @Test
+    fun clockJumpPastTheDeadlineHidesOnTheNextTick() = runTest {
+        var now = 0L
+        val m = machine(nowMillis = { now })
+        m.push(Route.BACKUP)
+        m.revealWords()
+        now = 61_000L // suspended past the deadline
+        advanceTimeBy(1_000) // first tick after resume
+        runCurrent()
+        assertFalse(m.model.value.backup.revealed)
+        assertEquals(60, m.model.value.backup.countdown)
+    }
+
+    @Test
+    fun finishBackupCancelsTheRevealCountdown() = runTest {
+        // Issue #3: leaving via "I've written them down" must hide the words and stop the timer.
+        val m = machine()
+        m.go(Route.SETTINGS)
+        m.push(Route.BACKUP)
+        m.revealWords()
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals(40, m.model.value.backup.countdown)
+        m.finishBackup()
+        m.push(Route.BACKUP) // re-enter: words must be hidden with a fresh countdown
+        assertFalse(m.model.value.backup.revealed)
+        assertEquals(60, m.model.value.backup.countdown)
+        val settled = m.model.value
+        advanceTimeBy(120_000) // a stale countdown job must not mutate anything further
+        runCurrent()
+        assertEquals(settled, m.model.value)
     }
 
     @Test
@@ -765,6 +868,40 @@ class AppStateMachineFlowsTest {
         assertEquals("4 hours ago", m.model.value.advanced.funds.lastRefresh)
         m.forceHealth(HealthState.STALE)
         assertEquals("38 days ago", m.model.value.advanced.funds.lastRefresh)
+    }
+
+    // --- Core push seam: emissions outside any machine intent must reach the model ---
+    // Note: TestScope.advanceUntilIdle() only drives until no *foreground* work remains, and
+    // machine coroutines live on backgroundScope — runCurrent()/advanceTimeBy() drive them.
+
+    @Test
+    fun coreHealthChangeOutsideAnIntentReachesTheModel() = runTest {
+        val core = FakeLarkCore(startWithWallet = true)
+        val m = machine(core = core)
+        core.forceHealth(HealthState.OFFLINE) // directly on the core; no machine intent
+        runCurrent()
+        assertTrue(m.model.value.health.offline)
+        assertEquals("Can’t reach the network", assertNotNull(m.model.value.health.banner).title)
+    }
+
+    @Test
+    fun coreBalanceChangeOutsideAnIntentReachesTheModel() = runTest {
+        val core = FakeLarkCore(startWithWallet = true)
+        val m = machine(core = core)
+        backgroundScope.launch { core.send("jack@lark.money", 520) } // no machine intent
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals("₿411,830", m.model.value.balance.primary)
+    }
+
+    @Test
+    fun coreBackedUpChangeOutsideAnIntentReachesTheModel() = runTest {
+        val core = FakeLarkCore(startWithWallet = true)
+        val m = machine(core = core)
+        core.markBackedUp() // directly on the core; no machine intent
+        runCurrent()
+        assertTrue(m.model.value.backup.backedUp)
+        assertEquals("Done", m.model.value.backup.statusLabel)
     }
 }
 

@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
@@ -14,6 +15,7 @@ import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.SendResult
 import xyz.lark.app.core.model.Transaction
+import kotlin.time.TimeSource
 
 private const val MAX_DIGITS = 8
 private const val COUNTDOWN_SECONDS = 60
@@ -24,8 +26,17 @@ private const val INPUT_PLACEHOLDER = "Name, invoice or address"
 private const val PASTED_HANDLE = "jack@lark.money"
 private const val SCAN_NAME = "Ferry Building Coffee"
 private const val SCAN_HANDLE = "ferry@sq.link"
-private const val SCAN_DIGITS = "520"
+private const val SCAN_SATS = 520L
 private const val HIDDEN_BALANCE = "••••"
+
+/**
+ * The default reveal-countdown clock: monotonic elapsed millis since machine construction.
+ * Monotonic so device wall-clock changes can't lengthen or shorten the reveal window.
+ */
+private fun monotonicNowMillis(): () -> Long {
+    val origin = TimeSource.Monotonic.markNow()
+    return { origin.elapsedNow().inWholeMilliseconds }
+}
 
 /** The prototype's DEMO state-rail labels and notes, keyed by health state. */
 private val DEMO_HEALTH_COPY = mapOf(
@@ -42,6 +53,7 @@ private data class MachineState(
     val denomination: Denomination = Denomination.BTC,
     val balanceVisible: Boolean = true,
     val digits: String = "",
+    val scannedSats: Long? = null,
     val mode: KeypadMode = KeypadMode.SEND,
     val sendWho: String = DEFAULT_RECIPIENT,
     val input: String = "",
@@ -62,13 +74,16 @@ private data class MachineState(
  *
  * All timing (send/refresh spinners inside the core, the 60s backup countdown, the 1.6s
  * copy flip) runs on the injected [scope], so tests drive it with virtual time (KTD-9).
- * [demo] is the demo-only seam (KTD-3): when absent, demo affordances vanish from the model.
+ * The backup countdown additionally reads the injected wall clock [nowMillis] so its deadline
+ * is absolute — coroutine suspension can't stretch it. [demo] is the demo-only seam (KTD-3):
+ * when absent, demo affordances vanish from the model.
  */
 @Suppress("TooManyFunctions") // one small intent function per prototype interaction, by design
 class AppStateMachine(
     private val core: LarkCore,
     private val demo: DemoControls? = null,
     private val scope: CoroutineScope,
+    private val nowMillis: () -> Long = monotonicNowMillis(),
 ) {
 
     private var state = MachineState(route = restingRoute())
@@ -80,6 +95,16 @@ class AppStateMachine(
     private var workJob: Job? = null
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
+
+    init {
+        // The core is the source of truth for wallet facts; a real (push-based) core emits
+        // outside our intents, so any emission re-renders the current state. Render is pure
+        // and reads the core's current values; StateFlow equality drops no-op re-renders.
+        scope.launch {
+            combine(core.balanceSats, core.health, core.walletExists, core.backedUp) { _, _, _, _ -> }
+                .collect { update { it } }
+        }
+    }
 
     // --- Navigation (KTD-4) ---
 
@@ -141,7 +166,7 @@ class AppStateMachine(
     fun keyPress(digit: Char) {
         if (digit !in '0'..'9') return
         if (state.digits.length >= MAX_DIGITS || (state.digits.isEmpty() && digit == '0')) return
-        update { it.copy(digits = it.digits + digit) }
+        update { it.copy(digits = it.digits + digit, scannedSats = null) }
     }
 
     /** Removes the last digit; no-op when empty. */
@@ -161,13 +186,13 @@ class AppStateMachine(
 
     /** Opens the keypad to pay the current recipient; digits reset, send mode. */
     fun goSendAmount() {
-        update { it.copy(digits = "", mode = KeypadMode.SEND) }
+        update { it.copy(digits = "", scannedSats = null, mode = KeypadMode.SEND) }
         push(Route.AMOUNT)
     }
 
     /** Opens the keypad to request an amount; digits reset, receive mode. */
     fun goReceiveAmount() {
-        update { it.copy(digits = "", mode = KeypadMode.RECEIVE) }
+        update { it.copy(digits = "", scannedSats = null, mode = KeypadMode.RECEIVE) }
         push(Route.AMOUNT)
     }
 
@@ -176,13 +201,33 @@ class AppStateMachine(
 
     /** Picking a recent pre-fills the recipient and jumps to a fresh send keypad. */
     fun pickRecent(contact: Contact) {
-        update { it.copy(input = contact.handle, sendWho = contact.who, digits = "", mode = KeypadMode.SEND) }
+        update {
+            it.copy(
+                input = contact.handle,
+                sendWho = contact.who,
+                digits = "",
+                scannedSats = null,
+                mode = KeypadMode.SEND,
+            )
+        }
         push(Route.AMOUNT)
     }
 
-    /** The simulated scan finds Ferry Building Coffee for 520 sats and jumps straight to review. */
+    /**
+     * The simulated scan finds Ferry Building Coffee for 520 sats and jumps straight to review.
+     * The invoice amount is stored as sats — never as keypad digits, whose meaning depends on
+     * the current denomination (digits are cents in fiat mode).
+     */
     fun scanFound() {
-        update { it.copy(input = SCAN_HANDLE, sendWho = SCAN_NAME, digits = SCAN_DIGITS, mode = KeypadMode.SEND) }
+        update {
+            it.copy(
+                input = SCAN_HANDLE,
+                sendWho = SCAN_NAME,
+                digits = "",
+                scannedSats = SCAN_SATS,
+                mode = KeypadMode.SEND,
+            )
+        }
         go(Route.REVIEW)
     }
 
@@ -237,27 +282,42 @@ class AppStateMachine(
 
     // --- Backup (KTD-9) ---
 
-    /** Reveals the words and starts the 60s countdown; on expiry they re-hide (AE4). */
+    /**
+     * Reveals the words and starts the 60s countdown; on expiry they re-hide (AE4).
+     * The deadline is absolute — [nowMillis] plus 60s — and every tick recomputes the
+     * remaining time from the clock, so suspended ticks (e.g. iOS backgrounding) cannot
+     * extend the reveal: the first tick after resume counts all elapsed real time.
+     */
     fun revealWords() {
+        val deadline = nowMillis() + COUNTDOWN_SECONDS * ONE_SECOND_MILLIS
         update { it.copy(wordsRevealed = true, countdown = COUNTDOWN_SECONDS) }
         countdownJob?.cancel()
         countdownJob = scope.launch {
-            var remaining = COUNTDOWN_SECONDS
-            while (remaining > 0) {
+            while (true) {
                 delay(ONE_SECOND_MILLIS)
-                remaining -= 1
-                if (remaining == 0) {
+                val remainingMillis = deadline - nowMillis()
+                if (remainingMillis <= 0) {
                     update { it.copy(wordsRevealed = false, countdown = COUNTDOWN_SECONDS) }
-                } else {
-                    update { it.copy(countdown = remaining) }
+                    break
                 }
+                update { it.copy(countdown = wholeSecondsCeil(remainingMillis)) }
             }
         }
     }
 
-    /** "I've written them down": marks backed up and pops back to settings. */
+    /** Millis → whole seconds, rounding up: 1ms left still shows 1, never 0. */
+    private fun wholeSecondsCeil(millis: Long): Int =
+        ((millis + ONE_SECOND_MILLIS - 1) / ONE_SECOND_MILLIS).toInt()
+
+    /**
+     * "I've written them down": marks backed up, hides the words (cancelling the reveal
+     * countdown so a stale timer can't fire later), and pops back to settings.
+     */
     fun finishBackup() {
+        countdownJob?.cancel()
+        countdownJob = null
         core.markBackedUp()
+        update { it.copy(wordsRevealed = false, countdown = COUNTDOWN_SECONDS) }
         back()
     }
 
@@ -299,8 +359,13 @@ class AppStateMachine(
 
     private fun restingRoute(): Route = if (core.walletExists.value) Route.HOME else Route.WELCOME
 
-    /** Digits are sats in btc mode and cents in fiat mode (KTD-6). */
+    /**
+     * The amount in play, always in sats. A scanned invoice amount ([MachineState.scannedSats])
+     * is already sats and wins outright; typed digits are sats in btc mode and cents in fiat
+     * mode (KTD-6).
+     */
     private fun typedSats(s: MachineState): Long {
+        s.scannedSats?.let { return it }
         val typed = s.digits.toLongOrNull() ?: 0L
         return if (s.denomination == Denomination.FIAT) core.fiatRate.centsToSats(typed) else typed
     }
@@ -320,6 +385,7 @@ class AppStateMachine(
         screenLabel = s.route.screenLabel,
         denomination = s.denomination,
         balance = renderBalance(s),
+        exitAmount = primary(core.balanceSats.value, s.denomination),
         health = renderHealth(),
         keypad = renderKeypad(s),
         send = renderSend(s),
@@ -366,7 +432,7 @@ class AppStateMachine(
         val over = isOverBalance(s)
         val fiatFirst = s.denomination == Denomination.FIAT
         val display = when {
-            s.digits.isEmpty() -> if (fiatFirst) "$0" else "₿0"
+            s.digits.isEmpty() && s.scannedSats == null -> if (fiatFirst) "$0" else "₿0"
             else -> primary(sats, s.denomination)
         }
         val availability = when {

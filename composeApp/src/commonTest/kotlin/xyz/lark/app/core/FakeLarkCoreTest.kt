@@ -1,6 +1,8 @@
 package xyz.lark.app.core
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.SendResult
@@ -45,6 +47,60 @@ class FakeLarkCoreTest {
         core.forceHealth(HealthState.OFFLINE)
         core.send("jack@lark.money", 520)
         assertEquals(412_350L, core.balanceSats.value)
+    }
+
+    @Test
+    fun sendRejectsZeroSatsAndLeavesTheBalanceUnchanged() = runTest {
+        val core = core()
+        assertEquals(SendResult.Failure, core.send("jack@lark.money", 0))
+        assertEquals(412_350L, core.balanceSats.value)
+    }
+
+    @Test
+    fun sendRejectsNegativeSatsAndLeavesTheBalanceUnchanged() = runTest {
+        val core = core()
+        assertEquals(SendResult.Failure, core.send("jack@lark.money", -520))
+        assertEquals(412_350L, core.balanceSats.value)
+    }
+
+    @Test
+    fun sendRejectsMoreThanTheBalanceAndLeavesItUnchanged() = runTest {
+        val core = core()
+        assertEquals(SendResult.Failure, core.send("jack@lark.money", 412_351L))
+        assertEquals(412_350L, core.balanceSats.value)
+    }
+
+    @Test
+    fun sendAllowsExactlyTheFullBalance() = runTest {
+        val core = core()
+        assertEquals(SendResult.Success, core.send("jack@lark.money", 412_350L))
+        assertEquals(0L, core.balanceSats.value)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun twoConcurrentSendsDebitExactlyTwice() = runTest {
+        val core = core()
+        val first = async { core.send("jack@lark.money", 520) }
+        val second = async { core.send("maya@zaprite.com", 480) }
+        advanceUntilIdle()
+        assertEquals(SendResult.Success, first.await())
+        assertEquals(SendResult.Success, second.await())
+        assertEquals(412_350L - 1_000L, core.balanceSats.value)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun concurrentSendsCannotJointlyOverdraw() = runTest {
+        // Read-check-debit must be serialized: only one of two racing near-full sends may land.
+        val core = core()
+        val first = async { core.send("jack@lark.money", 412_000L) }
+        val second = async { core.send("maya@zaprite.com", 412_000L) }
+        advanceUntilIdle()
+        val results = listOf(first.await(), second.await())
+        assertEquals(1, results.count { it == SendResult.Success })
+        assertEquals(1, results.count { it == SendResult.Failure })
+        assertEquals(412_350L - 412_000L, core.balanceSats.value)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

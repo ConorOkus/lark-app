@@ -163,7 +163,7 @@ private fun HealthRoute(model: AppModel, machine: AppStateMachine) = HealthScree
 /** The EXIT branch: binds [ExitScreen]'s callbacks to the machine's intents. */
 @Composable
 private fun ExitRoute(model: AppModel, machine: AppStateMachine) = ExitScreen(
-    amount = model.balance.primary,
+    amount = model.exitAmount, // always unmasked: the screen states what moves on-chain (issue #4)
     onBack = machine::back,
     onStart = { machine.go(Route.HOME) },
 )
