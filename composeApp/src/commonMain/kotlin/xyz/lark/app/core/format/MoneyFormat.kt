@@ -44,7 +44,7 @@ object MoneyFormat {
     private fun sign(sats: Long): String = if (sats > 0) PLUS_SIGN else MINUS_SIGN
 
     /** Groups a non-negative number with comma separators: `1000000` → `1,000,000`. */
-    private fun grouped(value: Long): String =
+    internal fun grouped(value: Long): String =
         value.toString()
             .reversed()
             .chunked(GROUP_SIZE)

@@ -5,6 +5,7 @@
 
 package xyz.lark.app.core.gateway
 
+import xyz.lark.app.core.format.MoneyFormat
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.Transaction
 import kotlin.time.Duration.Companion.days
@@ -57,7 +58,6 @@ private val LAST_WEEK_LIMIT = LAST_WEEK_DAYS.days
 // 10-minute blocks: the same back-of-envelope maths the design's expiry copy assumes.
 private const val BLOCKS_PER_DAY = 144L
 private const val BLOCKS_PER_HOUR = 6L
-private const val GROUP_SIZE = 3
 
 /**
  * Resolves what the caller hands `send` into the destination string `POST /wallet/send` accepts.
@@ -89,11 +89,18 @@ private fun bip321OffchainDestination(uri: String): String? {
  * balance delta: the effective (fee-inclusive) figure once successful, the intended figure
  * while still pending — always what the balance actually saw or will see.
  */
-internal fun activityFromMovements(movements: List<Movement>, now: Instant): List<Transaction> =
+internal fun activityFromMovements(orderedMovements: List<Movement>, now: Instant): List<Transaction> =
+    orderedMovements.map { transactionOf(it, now) }
+
+/**
+ * Shared ordering rule for the history-derived views: displayable statuses, newest first.
+ * Compute once per history snapshot and feed both [activityFromMovements] and
+ * [recentsFromMovements] — the sort's time-parsing is the expensive part.
+ */
+internal fun movementsNewestFirst(movements: List<Movement>): List<Movement> =
     movements
         .filter { it.status in ACTIVITY_STATUSES }
         .sortedByDescending { parsedTime(it.time.createdAt) ?: Instant.DISTANT_PAST }
-        .map { transactionOf(it, now) }
 
 private fun transactionOf(movement: Movement, now: Instant): Transaction {
     val sats = if (movement.status == STATUS_SUCCESSFUL) {
@@ -117,15 +124,16 @@ private fun transactionOf(movement: Movement, now: Instant): Transaction {
  * most recent first, capped at the demo's three rows. Empty history → empty list.
  * [Contact.handle] keeps the full destination string — the send flow feeds it back to `send`.
  */
-internal fun recentsFromMovements(movements: List<Movement>): List<Contact> =
-    movements
-        .filter { it.status in ACTIVITY_STATUSES }
-        .sortedByDescending { parsedTime(it.time.createdAt) ?: Instant.DISTANT_PAST }
+internal fun recentsFromMovements(orderedMovements: List<Movement>): List<Contact> =
+    orderedMovements
         .flatMap { it.sentTo }
         .map { it.destination.value }
         .distinct()
         .take(RECENTS_LIMIT)
-        .map { Contact(who = displayName(it), handle = it, initial = initialOf(displayName(it))) }
+        .map { destination ->
+            val name = displayName(destination)
+            Contact(who = name, handle = destination, initial = initialOf(name))
+        }
 
 /** Splits the gateway's space-separated BIP-39 phrase into words; whitespace-tolerant. */
 internal fun splitMnemonicWords(mnemonic: String): List<String> =
@@ -143,7 +151,7 @@ internal fun soonestExpiryLabel(vtxos: List<WalletVtxoInfo>, tipHeight: Long): S
     return if (minExpiry == null || tipHeight <= 0) {
         PLACEHOLDER
     } else {
-        "block ${groupedThousands(minExpiry)} · ${expiryCountdown(minExpiry - tipHeight)}"
+        "block ${MoneyFormat.grouped(minExpiry)} · ${expiryCountdown(minExpiry - tipHeight)}"
     }
 }
 
@@ -184,6 +192,3 @@ private fun displayName(destination: String): String = when {
 
 private fun initialOf(who: String): String = who.firstOrNull()?.uppercase() ?: "?"
 
-/** Same hand-rolled grouping as MoneyFormat (private there): identical on every target. */
-private fun groupedThousands(value: Long): String =
-    value.toString().reversed().chunked(GROUP_SIZE).joinToString(",").reversed()
