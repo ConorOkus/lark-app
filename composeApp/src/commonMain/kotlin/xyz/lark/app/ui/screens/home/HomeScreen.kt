@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -15,9 +16,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.BalanceModel
@@ -42,6 +45,9 @@ private val HideRowGap = 18.dp
 private val HideRowHeight = 44.dp
 
 private const val HIDE_LABEL_ALPHA = 0.4f
+
+// Optical compensation for the fallback-font ₿ glyph's left side bearing (fraction of font size).
+private const val BTC_GLYPH_LEFT_BEARING_EM = 0.10f
 
 /**
  * Home — balance (spec block `data-screen-label="Home — balance"`): wordmark + health
@@ -154,10 +160,22 @@ private fun BalanceBlock(
 @Composable
 private fun BalanceAmounts(balance: BalanceModel, onToggleUnit: () -> Unit) {
     if (balance.visible) {
+        val heroStyle = LarkTheme.typography.displayHero
         Text(
             text = balance.primary,
-            style = LarkTheme.typography.displayHero,
+            style = heroStyle,
             color = LarkColors.TextPrimary,
+            modifier = Modifier.offset {
+                // The ₿ glyph (U+20BF) renders from a fallback font whose wide left
+                // side bearing makes the hero amount look indented against the fiat
+                // line below; nudge it left so both start optically flush.
+                val bearing = if (balance.primary.startsWith('₿')) {
+                    (heroStyle.fontSize.toPx() * BTC_GLYPH_LEFT_BEARING_EM).roundToInt()
+                } else {
+                    0
+                }
+                IntOffset(-bearing, 0)
+            },
         )
         Spacer(modifier = Modifier.height(SecondaryGap))
         Text(
