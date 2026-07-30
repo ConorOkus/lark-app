@@ -206,8 +206,10 @@ pub fn seal_seed_artifact(seed_material: &[u8], passphrase: &[u8]) -> Result<Vec
     Ok(out)
 }
 
-/// Open a seed artifact with the passphrase, using the Argon2id parameters
-/// recorded in the header (forward-compatible with a future params bump).
+/// Open a seed artifact with the passphrase. The Argon2id parameters in the
+/// header are enforced to equal the pinned v1 constants before the KDF runs
+/// (a future params change is a format-version bump, not a header free-for-all)
+/// so a tampered header cannot drive a memory-exhaustion DoS on restore.
 pub fn open_seed_artifact(blob: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, BackupError> {
     let mut c = Cursor::new(blob);
     let format_version = c.u16()?;

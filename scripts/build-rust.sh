@@ -24,7 +24,9 @@ verify_fork() {
   want="$(awk -v s="[$name]" '$0==s{f=1;next} /^\[/{f=0} f&&/^sha/{gsub(/[ "=]/,"");sub(/^sha/,"");print;exit}' "$PINS")"
   have="$(git -C "$dir" rev-parse HEAD)"
   if [ "${have#"$want"}" = "$have" ] && [ "${want#"$have"}" = "$want" ]; then
-    echo "WARNING: fork '$name' at $have does not match pinned $want" >&2
+    echo "ERROR: fork '$name' at $have does not match pinned $want (rust/fork-pins.toml)" >&2
+    echo "       check out the pinned SHA, or update fork-pins.toml deliberately." >&2
+    exit 1
   fi
 }
 

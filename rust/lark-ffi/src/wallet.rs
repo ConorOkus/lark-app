@@ -72,9 +72,11 @@ pub async fn open_wallet(
     words: Vec<String>,
 ) -> Result<Arc<LarkWallet>, LarkError> {
     let network = parse_network(&network)?;
-    let mnemonic = bip39::Mnemonic::parse_normalized(&words.join(" "))
+    // The joined phrase is secret; wipe it from the heap on drop.
+    let phrase = zeroize::Zeroizing::new(words.join(" "));
+    let mnemonic = bip39::Mnemonic::parse_normalized(&phrase)
         .map_err(|_| LarkError::Invalid { msg: "not a valid mnemonic".into() })?;
-    let seed64 = mnemonic.to_seed("");
+    let mut seed64 = mnemonic.to_seed("");
 
     let db_path = format!("{datadir}/wallet.sqlite");
     let db: Arc<dyn bark::persist::BarkPersister> = Arc::new(
@@ -101,7 +103,11 @@ pub async fn open_wallet(
     // `Wallet::fingerprint()` is the public accessor (WalletSeed::new is private).
     let fingerprint = wallet.fingerprint().to_string().into_bytes();
 
-    Ok(Arc::new(LarkWallet { inner: wallet, seed64, db_path, fingerprint }))
+    let out = Arc::new(LarkWallet { inner: wallet, seed64, db_path, fingerprint });
+    // Wipe this frame's copy of the seed; the struct keeps its own (zeroized on
+    // Drop). bark's onchain wallet holds a further copy outside our control.
+    seed64.zeroize();
+    Ok(out)
 }
 
 #[uniffi::export(async_runtime = "tokio")]
