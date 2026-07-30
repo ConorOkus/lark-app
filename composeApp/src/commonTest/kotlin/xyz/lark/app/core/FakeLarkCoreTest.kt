@@ -8,30 +8,20 @@ import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.SendResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+/**
+ * Fake-specific behavior: demo constants, [DemoControls.forceHealth], and the injected
+ * prototype delays. Seam-level behavior shared with the gateway (send guards, wallet
+ * lifecycle, backup flow) is pinned by [LarkCoreContractTest] via [FakeLarkCoreContractTest].
+ */
 class FakeLarkCoreTest {
 
     private fun core() = FakeLarkCore()
 
-    // --- Send ---
-
-    @Test
-    fun sendSucceedsWhenHealthy() = runTest {
-        val core = core()
-        val result = core.send("jack@lark.money", 520)
-        assertEquals(SendResult.Success, result)
-    }
-
-    @Test
-    fun sendDeductsBalanceOnSuccess() = runTest {
-        val core = core()
-        core.send("jack@lark.money", 520)
-        assertEquals(412_350L - 520L, core.balanceSats.value)
-    }
+    // --- Send (offline + concurrency + timing; the guard set lives in the contract suite) ---
 
     @Test
     fun sendFailsWhenOffline() = runTest {
@@ -47,34 +37,6 @@ class FakeLarkCoreTest {
         core.forceHealth(HealthState.OFFLINE)
         core.send("jack@lark.money", 520)
         assertEquals(412_350L, core.balanceSats.value)
-    }
-
-    @Test
-    fun sendRejectsZeroSatsAndLeavesTheBalanceUnchanged() = runTest {
-        val core = core()
-        assertEquals(SendResult.Failure, core.send("jack@lark.money", 0))
-        assertEquals(412_350L, core.balanceSats.value)
-    }
-
-    @Test
-    fun sendRejectsNegativeSatsAndLeavesTheBalanceUnchanged() = runTest {
-        val core = core()
-        assertEquals(SendResult.Failure, core.send("jack@lark.money", -520))
-        assertEquals(412_350L, core.balanceSats.value)
-    }
-
-    @Test
-    fun sendRejectsMoreThanTheBalanceAndLeavesItUnchanged() = runTest {
-        val core = core()
-        assertEquals(SendResult.Failure, core.send("jack@lark.money", 412_351L))
-        assertEquals(412_350L, core.balanceSats.value)
-    }
-
-    @Test
-    fun sendAllowsExactlyTheFullBalance() = runTest {
-        val core = core()
-        assertEquals(SendResult.Success, core.send("jack@lark.money", 412_350L))
-        assertEquals(0L, core.balanceSats.value)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -211,22 +173,7 @@ class FakeLarkCoreTest {
         assertEquals("Unreachable", offline.aspStatus)
     }
 
-    // --- Wallet lifecycle ---
-
-    @Test
-    fun walletDoesNotExistUntilCreated() = runTest {
-        val core = core()
-        assertFalse(core.walletExists.value)
-        core.createWallet()
-        assertTrue(core.walletExists.value)
-    }
-
-    @Test
-    fun restoreWalletAlsoCreatesTheWallet() = runTest {
-        val core = core()
-        core.restoreWallet()
-        assertTrue(core.walletExists.value)
-    }
+    // --- Wallet lifecycle (create/restore transitions live in the contract suite) ---
 
     @Test
     fun canStartWithAnExistingWallet() = runTest {
@@ -246,14 +193,6 @@ class FakeLarkCoreTest {
             ),
             words,
         )
-    }
-
-    @Test
-    fun markBackedUpFlipsTheFlag() = runTest {
-        val core = core()
-        assertFalse(core.backedUp.value)
-        core.markBackedUp()
-        assertTrue(core.backedUp.value)
     }
 
     // --- Static demo data ---
