@@ -97,6 +97,27 @@ data class ReceiveModel(
     val copyLabel: String,
 )
 
+/**
+ * One read-only Lightning channel row on the Advanced screen (plan U5, R8: no actions).
+ * [value] is `₿<local> of ₿<capacity> · <state>`, already masked in hidden-balance mode.
+ */
+data class ChannelRowModel(
+    val shortId: String,
+    val value: String,
+    val expiryLabel: String,
+)
+
+/**
+ * The Advanced screen's Lightning bridge row plus its channel rows. [bridgeValue] is the
+ * core's own placeholder string while the snapshot is null (never fetched — demo and stock
+ * gateway stay there forever), `0 channels` after a polled-and-empty snapshot, and
+ * `<n> channel[s] · ₿<total>` otherwise.
+ */
+data class ChannelsModel(
+    val bridgeValue: String,
+    val rows: List<ChannelRowModel>,
+)
+
 /** One row of the Advanced screen's DEMO health rail (present only with DemoControls). */
 data class DemoHealthOption(
     val state: HealthState,
@@ -134,6 +155,7 @@ data class AppModel(
     val backup: BackupModel,
     val receive: ReceiveModel,
     val advanced: AdvancedStats,
+    val channels: ChannelsModel,
     val demoHealth: List<DemoHealthOption>?,
     val networkLabel: String,
 )

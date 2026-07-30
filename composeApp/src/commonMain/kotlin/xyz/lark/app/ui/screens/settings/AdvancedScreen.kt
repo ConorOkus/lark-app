@@ -30,6 +30,7 @@ import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.NetworkStats
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
+import xyz.lark.app.state.ChannelsModel
 import xyz.lark.app.state.DemoHealthOption
 import xyz.lark.app.state.Route
 import xyz.lark.app.ui.components.HealthDot
@@ -111,7 +112,11 @@ fun AdvancedScreen(
         FundsGroup(funds = model.advanced.funds)
         Spacer(modifier = Modifier.height(SectionGap))
         SectionEyebrow(text = "NETWORK", modifier = Modifier.padding(bottom = EyebrowBottomGap))
-        NetworkGroup(network = model.advanced.network, dotColorHex = model.health.dotColorHex)
+        NetworkGroup(
+            network = model.advanced.network,
+            channels = model.channels,
+            dotColorHex = model.health.dotColorHex,
+        )
         Spacer(modifier = Modifier.height(SectionGap))
         ActionButtons(onRefresh = machine::runRefresh, onExit = { machine.push(Route.EXIT) })
         val demoHealth = model.demoHealth
@@ -171,9 +176,9 @@ private fun AddressCell(address: String) {
     }
 }
 
-/** NETWORK: the Ark server dot/status row, next round, Lightning bridge, and chain tip. */
+/** NETWORK: the Ark server dot/status row, next round, Lightning bridge + channel rows, chain tip. */
 @Composable
-private fun NetworkGroup(network: NetworkStats, dotColorHex: String) {
+private fun NetworkGroup(network: NetworkStats, channels: ChannelsModel, dotColorHex: String) {
     RowGroup {
         Row(
             modifier = Modifier
@@ -194,28 +199,42 @@ private fun NetworkGroup(network: NetworkStats, dotColorHex: String) {
         RowGroupDivider()
         StatValueRow(label = "Next round", value = network.nextRound)
         RowGroupDivider()
-        StatValueRow(label = "Lightning bridge", value = network.lightningBridge)
+        StatValueRow(label = "Lightning bridge", value = channels.bridgeValue)
+        channels.rows.forEach { row ->
+            RowGroupDivider()
+            // One read-only channel row (plan U5, R8: no actions), in the stat-row idiom.
+            StatValueRow(label = row.shortId, value = row.value, subLine = row.expiryLabel)
+        }
         RowGroupDivider()
         StatValueRow(label = "Chain tip", value = MoneyFormat.btc(network.chainTip).removePrefix("₿"))
     }
 }
 
-/** One stat line: 400 14sp label left, 600 14sp tabular value right. */
+/** One stat line: 400 14sp label left, 600 14sp tabular value right, optional caption sub-line. */
 @Composable
-private fun StatValueRow(label: String, value: String) {
-    Row(
+private fun StatValueRow(label: String, value: String, subLine: String? = null) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = RowHorizontalPadding, vertical = RowVerticalPadding),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            style = LarkTheme.typography.label,
-            color = LarkColors.TextSecondary,
-            modifier = Modifier.weight(1f),
-        )
-        Text(text = value, style = statValueStyle(), color = LarkColors.TextPrimary, textAlign = TextAlign.End)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = LarkTheme.typography.label,
+                color = LarkColors.TextSecondary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(text = value, style = statValueStyle(), color = LarkColors.TextPrimary, textAlign = TextAlign.End)
+        }
+        if (subLine != null) {
+            Text(
+                text = subLine,
+                style = LarkTheme.typography.caption,
+                color = LarkColors.TextPrimary.copy(alpha = NOTE_ALPHA),
+                modifier = Modifier.padding(top = AddressNoteGap),
+            )
+        }
     }
 }
 

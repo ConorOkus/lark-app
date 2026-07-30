@@ -24,8 +24,12 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
- * Typed client for the barkd REST API, pinned to the vendored 0.4.0 contract
- * (docs/gateway/barkd-openapi-0.4.0.json; summary in docs/gateway/barkd-api.md).
+ * Typed client for the barkd REST API, pinned to the vendored contract of its [variant]:
+ * stock 0.4.0 (docs/gateway/barkd-openapi-0.4.0.json; summary in docs/gateway/barkd-api.md)
+ * or the fork 0.1.0-beta.6 (docs/gateway/barkd-fork-openapi-0.1.0-beta.6.json; summary in
+ * docs/gateway/barkd-fork-api.md). The route/shape differences live in [capabilities];
+ * fork-only endpoints are marked in their KDoc and must only be called when the matching
+ * capability flag is set.
  *
  * Every call decorates the request through [auth] (exactly once, in [call]), and returns a
  * [BarkdResult] — no Ktor or serialization exception escapes this class. Unknown JSON keys
@@ -41,7 +45,11 @@ class BarkdApi(
     engine: HttpClientEngine,
     private val baseUrl: String,
     private val auth: AuthDecorator = NoAuth,
+    variant: BarkdApiVariant = BarkdApiVariant.STOCK_0_4,
 ) {
+
+    /** What this client's surface offers; later units gate poll loops and UI on these flags. */
+    val capabilities: BarkdCapabilities = BarkdCapabilities.of(variant)
 
     private val client = HttpClient(engine) {
         expectSuccess = false
@@ -69,8 +77,9 @@ class BarkdApi(
     suspend fun vtxos(): BarkdResult<List<WalletVtxoInfo>> =
         call(HttpMethod.Get, "/api/v1/wallet/vtxos")
 
+    /** Routed per variant: `/api/v1/history` on stock, `/api/v1/wallet/history` on the fork. */
     suspend fun history(): BarkdResult<List<Movement>> =
-        call(HttpMethod.Get, "/api/v1/history")
+        call(HttpMethod.Get, capabilities.historyPath)
 
     suspend fun bip321(request: Bip321UriRequest): BarkdResult<Bip321UriResponse> =
         call(HttpMethod.Post, "/api/v1/wallet/bip321") {
@@ -88,6 +97,13 @@ class BarkdApi(
         call(HttpMethod.Post, "/api/v1/wallet/refresh/all")
 
     suspend fun createWallet(request: CreateWalletRequest): BarkdResult<CreateWalletResponse> =
+        call(HttpMethod.Post, "/api/v1/wallet/create") {
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
+
+    /** Fork-shape create ([BarkdCapabilities.usesForkCreateRequest]): same route, fork body. */
+    suspend fun createWallet(request: ForkCreateWalletRequest): BarkdResult<CreateWalletResponse> =
         call(HttpMethod.Post, "/api/v1/wallet/create") {
             contentType(ContentType.Application.Json)
             setBody(request)
@@ -121,6 +137,14 @@ class BarkdApi(
 
     suspend fun arkInfo(): BarkdResult<ArkInfo> =
         call(HttpMethod.Get, "/api/v1/wallet/ark-info")
+
+    /** Fork only ([BarkdCapabilities.hasChannels]): lists the wallet's Lightning channels. */
+    suspend fun channels(): BarkdResult<List<LightningChannelInfo>> =
+        call(HttpMethod.Get, "/api/v1/lightning/channels")
+
+    /** Fork only ([BarkdCapabilities.hasChannels]): derives and stores a fresh Ark address. */
+    suspend fun nextAddress(): BarkdResult<Address> =
+        call(HttpMethod.Post, "/api/v1/wallet/addresses/next")
 
     /**
      * The single request path: applies [auth], sends, and maps the outcome to [BarkdResult].
@@ -163,7 +187,7 @@ class BarkdApi(
     private fun contractError(response: HttpResponse, cause: Exception): BarkdResult.HttpError =
         BarkdResult.HttpError(
             status = response.status.value,
-            body = "contract error: 2xx body failed to decode against barkd 0.4.0: ${cause.message}",
+            body = "contract error: 2xx body failed to decode against ${capabilities.specLabel}: ${cause.message}",
         )
 
     private companion object {

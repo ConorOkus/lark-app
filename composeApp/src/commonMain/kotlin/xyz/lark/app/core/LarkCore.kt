@@ -1,7 +1,10 @@
 package xyz.lark.app.core
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import xyz.lark.app.core.model.AdvancedStats
+import xyz.lark.app.core.model.ChannelsSnapshot
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.FiatRate
 import xyz.lark.app.core.model.HealthState
@@ -32,6 +35,14 @@ interface LarkCore {
 
     /** Whether the user has confirmed writing down the backup words. */
     val backedUp: StateFlow<Boolean>
+
+    /**
+     * The wallet's Lightning channels, read-only. Null means never fetched: the demo core and
+     * the stock gateway stay null forever (this default), and only the channel-fork gateway
+     * overrides it — a successful poll with zero channels reads as a non-null empty snapshot.
+     */
+    val channels: StateFlow<ChannelsSnapshot?>
+        get() = NO_CHANNELS
 
     /** Payment history, newest first. */
     val activity: List<Transaction>
@@ -71,3 +82,6 @@ interface LarkCore {
      */
     suspend fun send(recipient: String, sats: Long): SendResult
 }
+
+/** The seam default for [LarkCore.channels]: a shared flow that stays null forever. */
+private val NO_CHANNELS: StateFlow<ChannelsSnapshot?> = MutableStateFlow<ChannelsSnapshot?>(null).asStateFlow()
