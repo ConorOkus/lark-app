@@ -6,6 +6,9 @@
 package xyz.lark.app.core.gateway
 
 import xyz.lark.app.core.format.MoneyFormat
+import xyz.lark.app.core.model.ChannelDisplay
+import xyz.lark.app.core.model.ChannelState
+import xyz.lark.app.core.model.ChannelsSnapshot
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.Transaction
 import kotlin.time.Duration.Companion.days
@@ -59,6 +62,9 @@ private val LAST_WEEK_LIMIT = LAST_WEEK_DAYS.days
 private const val BLOCKS_PER_DAY = 144L
 private const val BLOCKS_PER_HOUR = 6L
 
+/** msat → whole sats for channel balances (KTD-6: money is integer sats end-to-end). */
+private const val MSATS_PER_SAT = 1_000L
+
 /**
  * Resolves what the caller hands `send` into the destination string `POST /wallet/send` accepts.
  *
@@ -83,6 +89,22 @@ private fun bip321OffchainDestination(uri: String): String? {
         .associate { it.substringBefore('=').lowercase() to it.substringAfter('=') }
     return params[ARK_PARAM] ?: params[LIGHTNING_PARAM]
 }
+
+/**
+ * The fork receive URI (plan U3): the fork has no bip321 endpoint, so the app embeds the
+ * freshly minted `addresses/next` address in a `bitcoin:?ark=` URI itself. Guarded by a
+ * pragmatic bech32 shape check — a lowercase alphanumeric human-readable part, the `1`
+ * separator, then bech32-charset data — not full bech32m verification: its job is keeping
+ * URI-breaking or plainly non-bech32 strings out of the receive code. Anything failing the
+ * check returns null, the no-receive-code state.
+ */
+internal fun arkReceiveUri(address: String): String? =
+    if (ARK_ADDRESS_SHAPE.matches(address)) "$BIP321_SCHEME?$ARK_PARAM=$address" else null
+
+/** The 32 characters bech32/bech32m data may use (no `1`, `b`, `i`, `o`). */
+private const val BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+private val ARK_ADDRESS_SHAPE = Regex("[a-z][a-z0-9]*1[$BECH32_CHARSET]+")
 
 /**
  * Maps gateway history to activity rows, newest first. Amounts are the movement's signed
@@ -146,13 +168,46 @@ private val WHITESPACE = Regex("\\s+")
  * `block 918,402 · in 27 days` (10-minute-block countdown). [PLACEHOLDER] until both the
  * VTXO list and the chain tip have arrived.
  */
-internal fun soonestExpiryLabel(vtxos: List<WalletVtxoInfo>, tipHeight: Long): String {
-    val minExpiry = vtxos.minOfOrNull { it.expiryHeight }
-    return if (minExpiry == null || tipHeight <= 0) {
+internal fun soonestExpiryLabel(vtxos: List<WalletVtxoInfo>, tipHeight: Long): String =
+    blockExpiryLabel(vtxos.minOfOrNull { it.expiryHeight }, tipHeight)
+
+/** One expiry height in the block-countdown voice; [PLACEHOLDER] until height and tip are known. */
+internal fun blockExpiryLabel(expiryHeight: Long?, tipHeight: Long): String =
+    if (expiryHeight == null || tipHeight <= 0) {
         PLACEHOLDER
     } else {
-        "block ${MoneyFormat.grouped(minExpiry)} · ${expiryCountdown(minExpiry - tipHeight)}"
+        "block ${MoneyFormat.grouped(expiryHeight)} · ${expiryCountdown(expiryHeight - tipHeight)}"
     }
+
+/**
+ * The channels snapshot the seam exposes (plan U4). The bridge total the UI shows is the sum
+ * of the rows' local balances (R7: the rows sum to the total), so the snapshot carries only
+ * the rows — the daemon's separate usable-only aggregate is deliberately not fetched.
+ */
+internal fun channelsSnapshot(
+    channels: List<LightningChannelInfo>,
+    tipHeight: Long,
+): ChannelsSnapshot = ChannelsSnapshot(
+    channels = channels.map { channelDisplay(it, tipHeight) },
+)
+
+/**
+ * One channel's display row: usable wins, a not-yet-ready funding reads as opening, and
+ * ready-but-unusable is honestly unusable. `force_close_spend_delay` is a static CSV
+ * parameter, deliberately not displayed (plan U4 scope boundary).
+ */
+internal fun channelDisplay(channel: LightningChannelInfo, tipHeight: Long): ChannelDisplay = ChannelDisplay(
+    shortId = abbreviated(channel.channelId),
+    localSat = channel.localBalanceMsat / MSATS_PER_SAT,
+    capacitySat = channel.capacitySat,
+    state = channelState(channel),
+    expiryLabel = blockExpiryLabel(channel.expiryHeight, tipHeight),
+)
+
+private fun channelState(channel: LightningChannelInfo): ChannelState = when {
+    channel.isUsable -> ChannelState.USABLE
+    !channel.isChannelReady -> ChannelState.OPENING
+    else -> ChannelState.UNUSABLE
 }
 
 private fun expiryCountdown(blocks: Long): String = when {
@@ -184,10 +239,14 @@ private fun parsedTime(rfc3339: String): Instant? = runCatching { Instant.parse(
 private fun counted(count: Long, unit: String): String = if (count == 1L) "1 $unit" else "$count ${unit}s"
 
 /** Lightning addresses read as names; long ark/BOLT11 strings abbreviate to head…tail. */
-private fun displayName(destination: String): String = when {
-    destination.contains('@') -> destination
-    destination.length <= MAX_PLAIN_NAME_LENGTH -> destination
-    else -> destination.take(NAME_PREFIX_LENGTH) + ELLIPSIS + destination.takeLast(NAME_SUFFIX_LENGTH)
+private fun displayName(destination: String): String =
+    if (destination.contains('@')) destination else abbreviated(destination)
+
+/** Head…tail abbreviation for long identifiers (destinations, channel ids); short ones stay whole. */
+private fun abbreviated(value: String): String = if (value.length <= MAX_PLAIN_NAME_LENGTH) {
+    value
+} else {
+    value.take(NAME_PREFIX_LENGTH) + ELLIPSIS + value.takeLast(NAME_SUFFIX_LENGTH)
 }
 
 private fun initialOf(who: String): String = who.firstOrNull()?.uppercase() ?: "?"

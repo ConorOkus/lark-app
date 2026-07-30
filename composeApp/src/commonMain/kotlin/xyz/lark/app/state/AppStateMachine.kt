@@ -11,6 +11,8 @@ import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.MoneyFormat
+import xyz.lark.app.core.model.ChannelDisplay
+import xyz.lark.app.core.model.ChannelState
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.SendResult
@@ -37,6 +39,14 @@ private fun monotonicNowMillis(): () -> Long {
     val origin = TimeSource.Monotonic.markNow()
     return { origin.elapsedNow().inWholeMilliseconds }
 }
+
+/** Lowercase channel-state labels, matching the Advanced screen's voice. */
+private val ChannelState.label: String
+    get() = when (this) {
+        ChannelState.USABLE -> "usable"
+        ChannelState.OPENING -> "opening"
+        ChannelState.UNUSABLE -> "unusable"
+    }
 
 /** The prototype's DEMO state-rail labels and notes, keyed by health state. */
 private val DEMO_HEALTH_COPY = mapOf(
@@ -101,7 +111,13 @@ class AppStateMachine(
         // outside our intents, so any emission re-renders the current state. Render is pure
         // and reads the core's current values; StateFlow equality drops no-op re-renders.
         scope.launch {
-            combine(core.balanceSats, core.health, core.walletExists, core.backedUp) { _, _, _, _ -> }
+            combine(
+                core.balanceSats,
+                core.health,
+                core.walletExists,
+                core.backedUp,
+                core.channels,
+            ) { _, _, _, _, _ -> }
                 .collect { update { it } }
         }
     }
@@ -379,26 +395,64 @@ class AppStateMachine(
     private fun secondary(sats: Long, denomination: Denomination): String =
         if (denomination == Denomination.FIAT) MoneyFormat.btc(sats) else MoneyFormat.fiat(sats, core.fiatRate)
 
-    private fun render(s: MachineState): AppModel = AppModel(
-        route = s.route,
-        canGoBack = s.route != Route.SENDING && (s.stack.isNotEmpty() || s.route != restingRoute()),
-        screenLabel = s.route.screenLabel,
-        denomination = s.denomination,
-        balance = renderBalance(s),
-        exitAmount = primary(core.balanceSats.value, s.denomination),
-        health = renderHealth(),
-        keypad = renderKeypad(s),
-        send = renderSend(s),
-        sentAmount = s.confirmedAmountDisplay,
-        txDetail = renderTxDetail(s),
-        activity = core.activity.map { renderActivityRow(it, s.denomination) },
-        recents = core.recents,
-        backup = renderBackup(s),
-        receive = renderReceive(s),
-        advanced = core.advancedStats(),
-        demoHealth = renderDemoHealth(),
-        networkLabel = core.networkLabel,
+    private fun render(s: MachineState): AppModel {
+        val advanced = core.advancedStats()
+        return AppModel(
+            route = s.route,
+            canGoBack = s.route != Route.SENDING && (s.stack.isNotEmpty() || s.route != restingRoute()),
+            screenLabel = s.route.screenLabel,
+            denomination = s.denomination,
+            balance = renderBalance(s),
+            exitAmount = primary(core.balanceSats.value, s.denomination),
+            health = renderHealth(),
+            keypad = renderKeypad(s),
+            send = renderSend(s),
+            sentAmount = s.confirmedAmountDisplay,
+            txDetail = renderTxDetail(s),
+            activity = core.activity.map { renderActivityRow(it, s.denomination) },
+            recents = core.recents,
+            backup = renderBackup(s),
+            receive = renderReceive(s),
+            advanced = advanced,
+            channels = renderChannels(s, placeholder = advanced.network.lightningBridge),
+            demoHealth = renderDemoHealth(),
+            networkLabel = core.networkLabel,
+        )
+    }
+
+    /**
+     * Advanced's Lightning bridge value + channel rows (plan U5, R7). A null snapshot means
+     * never fetched (the demo core and the stock gateway stay there forever): the bridge row
+     * keeps the core's own [placeholder] string exactly as today. Channel sat amounts follow
+     * the hidden-balance mask; counts, state labels, and expiry lines stay visible.
+     */
+    private fun renderChannels(s: MachineState, placeholder: String): ChannelsModel {
+        val snapshot = core.channels.value
+        return when {
+            snapshot == null -> ChannelsModel(bridgeValue = placeholder, rows = emptyList())
+            snapshot.channels.isEmpty() -> ChannelsModel(bridgeValue = "0 channels", rows = emptyList())
+            else -> {
+                val count = snapshot.channels.size
+                val noun = if (count == 1) "channel" else "channels"
+                ChannelsModel(
+                    // R7: the rows sum to the bridge total, so the total is their sum.
+                    bridgeValue = "$count $noun · ${maskableBtc(snapshot.channels.sumOf { it.localSat }, s)}",
+                    rows = snapshot.channels.map { renderChannelRow(it, s) },
+                )
+            }
+        }
+    }
+
+    private fun renderChannelRow(channel: ChannelDisplay, s: MachineState): ChannelRowModel = ChannelRowModel(
+        shortId = channel.shortId,
+        value = "${maskableBtc(channel.localSat, s)} of ${maskableBtc(channel.capacitySat, s)}" +
+            " · ${channel.state.label}",
+        expiryLabel = channel.expiryLabel,
     )
+
+    /** A sat figure honoring the hidden-balance mask (R7): btc when visible, dots when hidden. */
+    private fun maskableBtc(sats: Long, s: MachineState): String =
+        if (s.balanceVisible) MoneyFormat.btc(sats) else HIDDEN_BALANCE
 
     private fun renderBalance(s: MachineState): BalanceModel {
         val sats = core.balanceSats.value

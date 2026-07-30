@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import xyz.lark.app.core.model.AdvancedStats
+import xyz.lark.app.core.model.ChannelsSnapshot
 import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.FiatRate
 import xyz.lark.app.core.model.FundsStats
@@ -72,6 +73,9 @@ class FakeLarkCore(
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
     override val health: StateFlow<HealthState> = healthFlow.asStateFlow()
     override val backedUp: StateFlow<Boolean> = backedUpFlow.asStateFlow()
+
+    /** The demo has no channels: explicitly the seam's never-fetched null (Advanced shows the placeholder). */
+    override val channels: StateFlow<ChannelsSnapshot?> = MutableStateFlow<ChannelsSnapshot?>(null).asStateFlow()
 
     override val fiatRate: FiatRate = FiatRate(satsPerCent = DEMO_SATS_PER_CENT)
     override val activity: List<Transaction> = DEMO_ACTIVITY
