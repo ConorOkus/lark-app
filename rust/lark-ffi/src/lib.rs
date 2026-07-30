@@ -60,7 +60,9 @@ pub fn generate_mnemonic(word_count: u8) -> Result<Vec<String>, LarkError> {
 /// is bootstrapping the wallet from it).
 #[uniffi::export]
 pub fn restore_seed_from_artifact(artifact: Vec<u8>, passphrase: String) -> Result<Vec<String>, LarkError> {
-    let entropy = backup::open_seed_artifact(&artifact, passphrase.as_bytes())?;
+    // Wipe the recovered entropy from the heap once the mnemonic is built; the
+    // `Mnemonic` itself zeroizes on drop via bip39's `zeroize` feature.
+    let entropy = zeroize::Zeroizing::new(backup::open_seed_artifact(&artifact, passphrase.as_bytes())?);
     let mnemonic = bip39::Mnemonic::from_entropy(&entropy)
         .map_err(|_| LarkError::Invalid { msg: "artifact did not contain a valid mnemonic".into() })?;
     Ok(mnemonic.words().map(|w| w.to_string()).collect())
@@ -71,9 +73,11 @@ pub fn restore_seed_from_artifact(artifact: Vec<u8>, passphrase: String) -> Resu
 /// mnemonic entropy, never a seed-derived key.
 #[uniffi::export]
 pub fn seal_seed_artifact(words: Vec<String>, passphrase: String) -> Result<Vec<u8>, LarkError> {
-    let phrase = words.join(" ");
+    // Both the joined phrase and the derived entropy are secret; wipe them from
+    // the heap on drop rather than leaving the seed in freed memory.
+    let phrase = zeroize::Zeroizing::new(words.join(" "));
     let mnemonic = bip39::Mnemonic::parse_normalized(&phrase)
         .map_err(|_| LarkError::Invalid { msg: "not a valid mnemonic".into() })?;
-    let entropy = mnemonic.to_entropy();
+    let entropy = zeroize::Zeroizing::new(mnemonic.to_entropy());
     Ok(backup::seal_seed_artifact(&entropy, passphrase.as_bytes())?)
 }

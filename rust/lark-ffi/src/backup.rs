@@ -221,6 +221,14 @@ pub fn open_seed_artifact(blob: &[u8], passphrase: &[u8]) -> Result<Vec<u8>, Bac
     let m_kib = c.u32()?;
     let t = c.u32()?;
     let p = c.u32()?;
+    // The Argon2 cost params must be verified BEFORE deriving the key, because
+    // derivation runs before the AEAD tag can authenticate the header. A
+    // tampered/corrupt artifact could otherwise set m_kib near the argon2 max
+    // and OOM-crash the device on every restore attempt. For format v1 the
+    // params are fixed, so anything other than the pinned values is rejected.
+    if (m_kib, t, p) != (ARGON_M_KIB, ARGON_T, ARGON_P) {
+        return Err(BackupError::Malformed("unexpected argon2 parameters"));
+    }
     let salt = c.take(SALT_LEN)?.to_vec();
     let nonce_bytes = c.take(NONCE_LEN)?.to_vec();
     let header_len = c.pos;
@@ -340,6 +348,16 @@ mod tests {
             !blob.windows(8).any(|w| w == &s[..8]),
             "seed bytes leaked into the state blob"
         );
+    }
+
+    #[test]
+    fn seed_artifact_rejects_out_of_policy_argon_params_before_kdf() {
+        // A tampered header with a huge memory cost must be rejected as
+        // Malformed (cheap) rather than driving a multi-GiB Argon2 allocation.
+        let mut blob = seal_seed_artifact(b"entropy", b"pw").unwrap();
+        // m_kib is the u32 right after format(2)+type(1): offset 3..7.
+        blob[3..7].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        assert!(matches!(open_seed_artifact(&blob, b"pw"), Err(BackupError::Malformed(_))));
     }
 
     #[test]

@@ -20,7 +20,7 @@ bark-wallet = { path = "../../../bark/bark", features = ["lightning", "onchain_b
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Match bark's versions so the bitcoin/bip39 types unify across the crate boundary.
 bitcoin = { version = "0.32", features = ["serde", "rand", "rand-std"] }
-bip39 = { version = "2.0.0", features = ["rand"] }
+bip39 = { version = "2.0.0", features = ["rand", "zeroize"] }
 
 uniffi = { version = "0.28", features = ["tokio", "cli"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }

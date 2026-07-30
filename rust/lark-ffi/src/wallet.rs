@@ -19,9 +19,20 @@ use bark::persist::sqlite::SqliteClient;
 use bark::onchain::OnchainWallet;
 use bark::{Config, Wallet};
 use bitcoin::Network;
+use zeroize::Zeroize;
 
 use crate::backup;
 use crate::LarkError;
+
+/// Removes a temp snapshot file when dropped, so `export_state_blob_plaintext`
+/// never leaves a plaintext copy of the wallet DB on disk on any exit path.
+struct TmpFileGuard<'a>(&'a str);
+
+impl Drop for TmpFileGuard<'_> {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.0);
+    }
+}
 
 /// An open in-process wallet. UniFFI object: constructed via [`open_wallet`],
 /// held by the platform as an `Arc`.
@@ -31,6 +42,14 @@ pub struct LarkWallet {
     seed64: [u8; 64],
     db_path: String,
     fingerprint: Vec<u8>,
+}
+
+impl Drop for LarkWallet {
+    fn drop(&mut self) {
+        // Wipe the raw seed when the wallet is dropped, honoring KTD-6's
+        // "key material never lingers" intent.
+        self.seed64.zeroize();
+    }
 }
 
 fn parse_network(s: &str) -> Result<Network, LarkError> {
@@ -114,8 +133,17 @@ impl LarkWallet {
     /// `VACUUM INTO` so the snapshot is transactionally consistent even while
     /// the wallet is live.
     pub fn export_state_blob_plaintext(&self) -> Result<Vec<u8>, LarkError> {
-        let tmp = format!("{}.snapshot-{}", self.db_path, std::process::id());
-        let _ = std::fs::remove_file(&tmp);
+        // Unique per-call path (pid + random) so concurrent exports on the same
+        // Arc<LarkWallet> never collide, and an RAII guard removes the plaintext
+        // snapshot on every exit path — including the read-error path, which
+        // would otherwise leak a full copy of the wallet DB to disk.
+        let tmp = format!(
+            "{}.snapshot-{}-{:016x}",
+            self.db_path,
+            std::process::id(),
+            rand::random::<u64>()
+        );
+        let guard = TmpFileGuard(&tmp);
         {
             let conn = rusqlite::Connection::open(&self.db_path)
                 .map_err(|e| LarkError::Wallet { msg: e.to_string() })?;
@@ -123,7 +151,7 @@ impl LarkWallet {
                 .map_err(|e| LarkError::Wallet { msg: e.to_string() })?;
         }
         let bytes = std::fs::read(&tmp).map_err(|e| LarkError::Wallet { msg: e.to_string() })?;
-        let _ = std::fs::remove_file(&tmp);
+        drop(guard);
         Ok(bytes)
     }
 
