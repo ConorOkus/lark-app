@@ -1,0 +1,21 @@
+# Machine-readable fork provenance (KTD-3 / KTD-9).
+# Single source of truth for the sibling checkouts lark-ffi path-depends on.
+# Consumed by scripts/build-rust.sh and .github/workflows/ci.yml so a fork bump
+# is a one-line reviewable diff gated by the contract suite — not whatever
+# sibling checkout happens to exist on a machine.
+#
+# Layout requirement: both repos are checked out as siblings of lark-app, i.e.
+#   <parent>/lark-app        (this repo)
+#   <parent>/bark            (bark-wallet + captaind fork)
+#   <parent>/rust-lightning  (LDK fork; bark path-deps ../rust-lightning)
+# so rust/lark-ffi resolves ../../../bark/bark and bark resolves ../rust-lightning.
+
+[bark]
+repo = "https://gitlab.com/gsanders87/bark"
+branch = "ark-channels-bridge-test-fixes"
+sha = "38304d95f2bba98edee2560f2fc2a36f16f0d84f"
+
+[rust-lightning]
+repo = "https://github.com/instagibbs/rust-lightning"
+branch = "ark-ldk-bridge-modern"
+sha = "0a0a489d634724708dbb194adf849151d2306cb4"

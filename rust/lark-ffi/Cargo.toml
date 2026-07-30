@@ -1,0 +1,40 @@
+[package]
+name = "lark-ffi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "lark_ffi"
+# cdylib for the mobile/host dynamic library; staticlib aids iOS static linking;
+# rlib lets the in-crate integration tests link against it.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Fork provenance is pinned in ../fork-pins.toml (KTD-3). The crate is `bark-wallet`
+# (lib name `bark`, so imports stay `use bark::...`). onchain_bdk is REQUIRED for
+# boarding + unilateral exit (R5); without it Wallet::create restricts those.
+bark-wallet = { path = "../../../bark/bark", features = ["lightning", "onchain_bdk"] }
+# Feature-unification links bundled SQLite so bark's rusqlite links on the Android
+# NDK (which ships no system libsqlite3).
+rusqlite = { version = "0.31", features = ["bundled"] }
+# Match bark's versions so the bitcoin/bip39 types unify across the crate boundary.
+bitcoin = { version = "0.32", features = ["serde", "rand", "rand-std"] }
+bip39 = { version = "2.0.0", features = ["rand"] }
+
+uniffi = { version = "0.28", features = ["tokio", "cli"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+thiserror = "1"
+anyhow = "1"
+
+# Backup crypto (KTD-6). Sealed operations only — derived key material never
+# crosses the FFI boundary.
+chacha20poly1305 = "0.10"   # XChaCha20-Poly1305 AEAD (24-byte nonce)
+argon2 = "0.5"              # Argon2id for the passphrase-derived seed-artifact key
+hkdf = "0.12"               # HKDF-SHA256 for the seed-derived state-blob key
+sha2 = "0.10"
+rand = "0.8"                # per-encryption nonce + per-artifact salt
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+uniffi = { version = "0.28", features = ["bindgen-tests"] }
