@@ -261,12 +261,6 @@ data class LightningChannelInfo(
     @SerialName("force_close_spend_delay") val forceCloseSpendDelay: Int? = null,
 )
 
-/** Fork `GET /api/v1/lightning/channels/balance` — total local balance across usable channels. */
-@Serializable
-data class LightningBalanceInfo(
-    @SerialName("balance_sat") val balanceSat: Long,
-)
-
 /** Fork `POST /api/v1/wallet/addresses/next` — a freshly derived Ark address. */
 @Serializable
 data class Address(
@@ -286,14 +280,14 @@ data class ForkCreateWalletRequest(
 )
 
 /**
- * The fork's `ChainSourceConfig` union: exactly one of [esplora] or [bitcoind] must be
- * non-null. BarkdApi's Json omits nulls (`explicitNulls = false`), so the encoded body
- * carries only the chosen branch, matching the spec's `oneOf`.
+ * The fork's `ChainSourceConfig` union. The spec also defines a bitcoind branch, but the app
+ * only ever constructs the esplora one ([CoreConfig.chainSource] is a single esplora URL), so
+ * only that branch is modelled. BarkdApi's Json omits nulls (`explicitNulls = false`), so the
+ * encoded body carries exactly the chosen branch, matching the spec's `oneOf`.
  */
 @Serializable
 data class ChainSourceConfig(
     val esplora: EsploraChainSource? = null,
-    val bitcoind: BitcoindChainSource? = null,
 )
 
 /** An Esplora HTTP server as chain source. */
@@ -302,29 +296,3 @@ data class EsploraChainSource(
     val url: String,
 )
 
-/** A bitcoind RPC server as chain source. */
-@Serializable
-data class BitcoindChainSource(
-    val bitcoind: String,
-    @SerialName("bitcoind_auth") val bitcoindAuth: BitcoindAuth,
-)
-
-/** The fork's `BitcoindAuth` union: exactly one of [cookie] or [userPass] must be non-null. */
-@Serializable
-data class BitcoindAuth(
-    val cookie: BitcoindCookieAuth? = null,
-    @SerialName("user-pass") val userPass: BitcoindUserPassAuth? = null,
-)
-
-/** Cookie-file authentication for a [BitcoindChainSource]. */
-@Serializable
-data class BitcoindCookieAuth(
-    val cookie: String,
-)
-
-/** Username/password authentication for a [BitcoindChainSource]. */
-@Serializable
-data class BitcoindUserPassAuth(
-    val user: String,
-    val pass: String,
-)

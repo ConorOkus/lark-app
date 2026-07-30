@@ -48,6 +48,9 @@ private const val HTTP_NOT_FOUND = 404
  */
 private const val STALE_THRESHOLD_DIVISOR = 2
 
+/** Rejected `addresses/next` mints re-try on later cycles, but only this many times. */
+private const val MAX_REJECTED_MINT_ATTEMPTS = 3
+
 /** barkd has no fiat/price endpoint (R8): the demo rate stands in, clearly marked. */
 private const val DEMO_SATS_PER_CENT = 10L
 
@@ -162,6 +165,7 @@ class GatewayLarkCore(
     private var recentRows: List<Contact> = emptyList()
     private var mnemonicWords: List<String> = emptyList()
     private var receiveCodeCache: String? = null
+    private var rejectedMintAttempts = 0
     private var depositAddressCache: String? = null
     private var tipHeight = 0L
     private var cachedArkInfo: ArkInfo? = null
@@ -439,9 +443,7 @@ class GatewayLarkCore(
     private suspend fun fetchChannelsState() {
         if (!api.capabilities.hasChannels) return
         val channelList = (api.channels() as? BarkdResult.Ok)?.value ?: return
-        (api.channelsBalance() as? BarkdResult.Ok)?.let { total ->
-            channelsFlow.value = channelsSnapshot(channelList, total.value.balanceSat, tipHeight)
-        }
+        channelsFlow.value = channelsSnapshot(channelList, tipHeight)
     }
 
     private fun applyHistory(movements: List<Movement>) {
@@ -471,14 +473,21 @@ class GatewayLarkCore(
     /**
      * Fork receive (U3): mints ONE address per session via `addresses/next` and builds the
      * `bitcoin:?ark=` URI client-side ([arkReceiveUri]). An address failing the charset check
-     * is never embedded: the empty string caches the no-receive-code state so the session
-     * neither shows a broken URI nor mints a fresh address on the daemon every cycle. Fetch
+     * is never embedded — a fresh address is minted on a later cycle instead (each call
+     * derives anew, so a transiently bogus response must not wedge receiving), but only
+     * [MAX_REJECTED_MINT_ATTEMPTS] times before the empty no-code state caches for the
+     * session: a persistently bogus daemon must not spin address derivation forever. Fetch
      * failures leave the cache null and retry next cycle, exactly like the bip321 path.
      */
     private suspend fun mintReceiveAddressIfNeeded(cycle: CycleOutcome) {
         if (receiveCodeCache != null) return
         cycle.note(api.nextAddress())?.let { minted ->
-            receiveCodeCache = arkReceiveUri(minted.address).orEmpty()
+            val uri = arkReceiveUri(minted.address)
+            receiveCodeCache = when {
+                uri != null -> uri
+                ++rejectedMintAttempts >= MAX_REJECTED_MINT_ATTEMPTS -> ""
+                else -> null
+            }
         }
     }
 

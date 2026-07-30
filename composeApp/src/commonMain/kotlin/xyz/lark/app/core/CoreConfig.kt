@@ -29,6 +29,16 @@ object CoreConfig {
     /** Network the gateway must report; anything else is a refusal to operate. */
     const val expectedNetwork: String = "mutinynet"
 
+    /** User-facing network name shown in the UI, decoupled from [expectedNetwork]. */
+    const val networkLabel: String = "mutinynet"
+
+    // --- Fork mode (BarkdApiVariant.FORK_BETA6) — these move TOGETHER --------------------
+    // Selecting the fork variant requires the whole set: the fork daemon identifies as
+    // "signet" on the wire, so expectedNetwork must be "signet" (networkLabel stays
+    // "mutinynet"), and the fork's wallet create needs the captaind URL. A partial edit
+    // fails fast in buildCore rather than as a silent runtime NETWORK_MISMATCH. The full
+    // recipe lives in docs/gateway/local-mutinynet.md.
+
     /** Which barkd REST surface the gateway speaks; only consulted when [mode] is [CoreMode.GATEWAY]. */
     val apiVariant: BarkdApiVariant = BarkdApiVariant.STOCK_0_4
 
@@ -41,11 +51,8 @@ object CoreConfig {
 
     /**
      * Esplora URL the fork's wallet create uses as its chain source; only consulted when
-     * [apiVariant] is [BarkdApiVariant.FORK_BETA6]. Empty by design — set per build, never
-     * a production default.
+     * [apiVariant] is [BarkdApiVariant.FORK_BETA6]. May stay empty on stacks whose wallet
+     * already exists (create then fails and the balance-probe adopt path takes over).
      */
     const val chainSource: String = ""
-
-    /** User-facing network name shown in the UI, decoupled from [expectedNetwork]. */
-    const val networkLabel: String = "mutinynet"
 }

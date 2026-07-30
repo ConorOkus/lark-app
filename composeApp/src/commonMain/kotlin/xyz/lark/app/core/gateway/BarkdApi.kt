@@ -142,10 +142,6 @@ class BarkdApi(
     suspend fun channels(): BarkdResult<List<LightningChannelInfo>> =
         call(HttpMethod.Get, "/api/v1/lightning/channels")
 
-    /** Fork only ([BarkdCapabilities.hasChannels]): total balance across usable channels. */
-    suspend fun channelsBalance(): BarkdResult<LightningBalanceInfo> =
-        call(HttpMethod.Get, "/api/v1/lightning/channels/balance")
-
     /** Fork only ([BarkdCapabilities.hasChannels]): derives and stores a fresh Ark address. */
     suspend fun nextAddress(): BarkdResult<Address> =
         call(HttpMethod.Post, "/api/v1/wallet/addresses/next")
@@ -191,7 +187,7 @@ class BarkdApi(
     private fun contractError(response: HttpResponse, cause: Exception): BarkdResult.HttpError =
         BarkdResult.HttpError(
             status = response.status.value,
-            body = "contract error: 2xx body failed to decode against barkd 0.4.0: ${cause.message}",
+            body = "contract error: 2xx body failed to decode against ${capabilities.specLabel}: ${cause.message}",
         )
 
     private companion object {

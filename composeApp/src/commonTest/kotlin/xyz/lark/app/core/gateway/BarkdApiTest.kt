@@ -310,13 +310,6 @@ class BarkdApiTest {
     }
 
     @Test
-    fun channelsBalanceDecodesBalanceSat() = runTest {
-        val engine = forkFixtureEngine()
-        assertEquals(500_000L, forkApi(engine).channelsBalance().okValue().balanceSat)
-        assertEquals(HttpMethod.Get to "/api/v1/lightning/channels/balance", engine.singleRequestLine())
-    }
-
-    @Test
     fun nextAddressPostsAndDecodesAddress() = runTest {
         val engine = forkFixtureEngine()
         assertEquals("ark1qf2knext", forkApi(engine).nextAddress().okValue().address)
@@ -351,6 +344,33 @@ class BarkdApiTest {
         val marker = AuthDecorator { it.headers.append("X-Test-Auth", "marker-1") }
         callAllEndpoints(api(engine, marker))
         assertEquals(14, engine.requestHistory.size)
+        engine.requestHistory.forEach { request ->
+            assertEquals(
+                "marker-1",
+                request.headers["X-Test-Auth"],
+                "auth decorator skipped on ${request.url.encodedPath}",
+            )
+        }
+    }
+
+    @Test
+    fun authDecoratorIsAppliedToEveryForkOnlyRequest() = runTest {
+        val engine = forkFixtureEngine()
+        val marker = AuthDecorator { it.headers.append("X-Test-Auth", "marker-1") }
+        val forkApi = forkApi(engine, marker)
+        listOf(
+            forkApi.channels(),
+            forkApi.nextAddress(),
+            forkApi.history(), // the fork's own history route
+            forkApi.createWallet(
+                ForkCreateWalletRequest(
+                    network = "signet",
+                    arkServer = "https://captaind.test",
+                    chainSource = ChainSourceConfig(esplora = EsploraChainSource(url = "https://esplora.test")),
+                ),
+            ),
+        )
+        assertEquals(4, engine.requestHistory.size)
         engine.requestHistory.forEach { request ->
             assertEquals(
                 "marker-1",

@@ -22,7 +22,7 @@ class ForkGatewayLarkCoreContractTest : LarkCoreContractTest() {
     override fun TestScope.fixture(): CoreFixture {
         val script = BarkdScript(BarkdScript.forkDefaults)
         val gateway = gatewayCore(barkdEngine(script), variant = BarkdApiVariant.FORK_BETA6)
-        runCurrent() // initial poll cycle has no wallet and no probe to consult: a no-op
+        runCurrent() // initial poll cycle is walletless: it only pings for reachability
         return object : CoreFixture {
             override val core = gateway
 

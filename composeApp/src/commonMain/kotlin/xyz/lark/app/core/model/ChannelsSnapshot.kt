@@ -29,6 +29,4 @@ data class ChannelDisplay(
  */
 data class ChannelsSnapshot(
     val channels: List<ChannelDisplay>,
-    /** Total local balance across channels, as the gateway's channels/balance reports it. */
-    val totalLocalSat: Long,
 )

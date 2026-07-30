@@ -98,21 +98,18 @@ class GatewayMappersTest {
     // --- Snapshot assembly ---
 
     @Test
-    fun snapshotCarriesTheGatewayTotalAndMapsEveryChannel() {
+    fun snapshotMapsEveryChannelAndTheRowsCarryTheTotal() {
         val snapshot = channelsSnapshot(
             channels = listOf(channel(localBalanceMsat = 300_000_000L), channel(localBalanceMsat = 200_000_000L)),
-            totalLocalSat = 500_000L,
             tipHeight = TIP_HEIGHT,
         )
         assertEquals(2, snapshot.channels.size)
-        assertEquals(500_000L, snapshot.totalLocalSat)
-        assertEquals(snapshot.totalLocalSat, snapshot.channels.sumOf { it.localSat })
+        assertEquals(500_000L, snapshot.channels.sumOf { it.localSat }, "the rows ARE the bridge total (R7)")
     }
 
     @Test
     fun snapshotOfZeroChannelsIsEmptyNotNull() {
-        val snapshot = channelsSnapshot(channels = emptyList(), totalLocalSat = 0L, tipHeight = TIP_HEIGHT)
+        val snapshot = channelsSnapshot(channels = emptyList(), tipHeight = TIP_HEIGHT)
         assertTrue(snapshot.channels.isEmpty())
-        assertEquals(0L, snapshot.totalLocalSat)
     }
 }

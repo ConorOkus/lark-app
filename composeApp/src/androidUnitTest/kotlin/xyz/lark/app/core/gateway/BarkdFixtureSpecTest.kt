@@ -47,6 +47,8 @@ class BarkdFixtureSpecTest {
             postPaths = setOf(
                 "/api/v1/wallet/create",
                 "/api/v1/wallet/addresses/next",
+                "/api/v1/wallet/send",
+                "/api/v1/wallet/refresh/all",
             ),
         )
     }

@@ -20,6 +20,8 @@ enum class BarkdApiVariant {
  * [CreateWalletRequest]).
  */
 data class BarkdCapabilities(
+    /** Human-readable surface name for error messages (contract-error attribution). */
+    val specLabel: String,
     /** Route serving the movement history (`/api/v1/history` stock, `/api/v1/wallet/history` fork). */
     val historyPath: String,
     /** `POST /api/v1/wallet/bip321` exists (stock only). */
@@ -36,6 +38,7 @@ data class BarkdCapabilities(
     companion object {
         fun of(variant: BarkdApiVariant): BarkdCapabilities = when (variant) {
             BarkdApiVariant.STOCK_0_4 -> BarkdCapabilities(
+                specLabel = "barkd 0.4.0",
                 historyPath = "/api/v1/history",
                 hasBip321 = true,
                 hasMnemonic = true,
@@ -44,6 +47,7 @@ data class BarkdCapabilities(
                 usesForkCreateRequest = false,
             )
             BarkdApiVariant.FORK_BETA6 -> BarkdCapabilities(
+                specLabel = "barkd 0.1.0-beta.6 (fork)",
                 historyPath = "/api/v1/wallet/history",
                 hasBip321 = false,
                 hasMnemonic = false,

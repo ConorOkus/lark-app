@@ -83,7 +83,7 @@ class GatewayLarkCoreForkTest {
     }
 
     @Test
-    fun forkReceiveRejectsAUriBreakingAddressIntoTheNoCodeState() = runTest {
+    fun forkReceiveRetriesARejectedAddressABoundedNumberOfTimes() = runTest {
         val script = forkScript()
         script.sticky(Paths.NEXT_ADDRESS, BarkdScript.Json("""{"address": "ark1qbad&extra=1"}"""))
         val core = settledForkCore(script)
@@ -91,9 +91,38 @@ class GatewayLarkCoreForkTest {
         assertEquals("", core.receiveCode, "a URI-breaking address must never be embedded")
         assertEquals(HealthState.READY, core.health.value, "a bogus address degrades receive, not health")
 
-        advanceThrough(45.seconds)
+        advanceThrough(150.seconds)
         assertEquals("", core.receiveCode)
-        assertEquals(1, script.countOf(Paths.NEXT_ADDRESS), "rejection must not re-mint an address every cycle")
+        assertEquals(3, script.countOf(Paths.NEXT_ADDRESS), "bounded retries, then the no-code state caches")
+    }
+
+    @Test
+    fun forkReceiveRecoversWhenARetriedMintReturnsAValidAddress() = runTest {
+        val script = forkScript()
+        script.enqueue(Paths.NEXT_ADDRESS, BarkdScript.Json("""{"address": "ark1qbad&extra=1"}"""))
+        val core = settledForkCore(script)
+        assertEquals("", core.receiveCode, "first mint rejected: no code yet")
+
+        advanceThrough(15.seconds) // the retry hits the default (valid) fixture
+        assertEquals("bitcoin:?ark=ark1qf2knext", core.receiveCode, "one bad response must not wedge the session")
+        assertEquals(2, script.countOf(Paths.NEXT_ADDRESS))
+    }
+
+    @Test
+    fun forkMintFetchFailureClassifiesHealthAndRetriesNextCycle() = runTest {
+        // Mint failures flow through the health classifier exactly like the stock bip321 path.
+        val script = forkScript()
+        script.sticky(Paths.NEXT_ADDRESS, BarkdScript.Broken("mint down"))
+        val core = settledForkCore(script)
+
+        assertEquals("", core.receiveCode)
+        assertEquals(HealthState.OFFLINE, core.health.value, "an unreachable mint classifies like any fetch")
+        assertEquals(GatewayOfflineReason.UNREACHABLE, core.offlineReason.value)
+
+        script.clearSticky(Paths.NEXT_ADDRESS)
+        advanceThrough(60.seconds)
+        assertEquals(HealthState.READY, core.health.value, "recovery probes bring the cycle back")
+        assertEquals("bitcoin:?ark=ark1qf2knext", core.receiveCode, "the cache stayed null: minting resumed")
     }
 
     // --- Create / adopt (no wallet-existence probe on the fork) ---
@@ -221,13 +250,11 @@ class GatewayLarkCoreForkTest {
             isChannelReady = false,
         )
         script.sticky(Paths.CHANNELS, BarkdScript.Json("[$usable, $opening]"))
-        script.sticky(Paths.CHANNELS_BALANCE, BarkdScript.Json("""{"balance_sat": 500000}"""))
         val core = settledForkCore(script)
 
         val snapshot = assertNotNull(core.channels.value, "a successful poll must populate the snapshot")
         assertEquals(2, snapshot.channels.size)
-        assertEquals(500_000L, snapshot.totalLocalSat, "the bridge total is the gateway's channels/balance figure")
-        assertEquals(snapshot.totalLocalSat, snapshot.channels.sumOf { it.localSat })
+        assertEquals(500_000L, snapshot.channels.sumOf { it.localSat }, "rows carry the bridge total (R7)")
         val first = snapshot.channels[0]
         assertEquals("741e8bd3…8bd3", first.shortId)
         assertEquals(300_000L, first.localSat)
@@ -243,7 +270,6 @@ class GatewayLarkCoreForkTest {
     fun forkChannelsSnapshotIsNullBeforeTheFirstPollAndEmptyAfterAZeroChannelPoll() = runTest {
         val script = forkScript()
         script.sticky(Paths.CHANNELS, BarkdScript.Json("[]"))
-        script.sticky(Paths.CHANNELS_BALANCE, BarkdScript.Json("""{"balance_sat": 0}"""))
         val core = forkCore(script)
         assertNull(core.channels.value, "never fetched reads as null, not as zero channels")
         runCurrent()
@@ -253,7 +279,6 @@ class GatewayLarkCoreForkTest {
         runCurrent()
         val snapshot = assertNotNull(core.channels.value, "polled-and-zero-channels is non-null")
         assertTrue(snapshot.channels.isEmpty())
-        assertEquals(0L, snapshot.totalLocalSat)
     }
 
     @Test
@@ -273,7 +298,6 @@ class GatewayLarkCoreForkTest {
         assertEquals(1, populated.channels.size)
 
         script.sticky(Paths.CHANNELS, serverError)
-        script.sticky(Paths.CHANNELS_BALANCE, serverError)
         advanceThrough(45.seconds)
         assertEquals(populated, core.channels.value, "failed cycles keep the last good snapshot")
         assertEquals(HealthState.READY, core.health.value, "even a 5xx streak on channels never flips health")
@@ -289,7 +313,7 @@ class GatewayLarkCoreForkTest {
         assertNull(core.channels.value, "stock has no channel surface: forever never-fetched")
         assertEquals(HealthState.READY, core.health.value)
         assertEquals(0, script.countOf(Paths.CHANNELS), "the stock core must never request channel paths")
-        assertEquals(0, script.countOf(Paths.CHANNELS_BALANCE))
+        assertEquals(0, script.countOf(Paths.NEXT_ADDRESS), "nor the fork's address mint")
     }
 
     // --- networkLabel decoupling (R5: mutinynet identifies as signet on the wire) ---

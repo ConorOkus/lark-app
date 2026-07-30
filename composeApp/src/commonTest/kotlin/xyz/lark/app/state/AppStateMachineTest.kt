@@ -939,7 +939,7 @@ class AppStateMachineChannelsTest {
     fun polledAndEmptySnapshotRendersZeroChannels() = runTest {
         val core = ChannelsCore()
         val m = channelsMachine(core)
-        core.channelsFlow.value = ChannelsSnapshot(channels = emptyList(), totalLocalSat = 0L)
+        core.channelsFlow.value = ChannelsSnapshot(channels = emptyList())
         runCurrent() // a core emission outside any intent must reach the model
         assertEquals("0 channels", m.model.value.channels.bridgeValue)
         assertTrue(m.model.value.channels.rows.isEmpty())
@@ -952,8 +952,7 @@ class AppStateMachineChannelsTest {
         core.channelsFlow.value = TWO_CHANNELS
         runCurrent()
         with(m.model.value.channels) {
-            // R7: the bridge total is the sum of the visible rows (the daemon's usable-only
-            // totalLocalSat of 169,999 is deliberately NOT what renders).
+            // R7: the bridge total is the sum of the visible rows.
             assertEquals("2 channels · ₿170,000", bridgeValue)
             assertEquals(2, rows.size)
             assertEquals("1230abc…f00d456", rows[0].shortId)
@@ -979,7 +978,6 @@ class AppStateMachineChannelsTest {
                     expiryLabel = "—",
                 ),
             ),
-            totalLocalSat = 1_000L,
         )
         runCurrent()
         with(m.model.value.channels) {
@@ -1036,7 +1034,6 @@ private val TWO_CHANNELS = ChannelsSnapshot(
             expiryLabel = "—",
         ),
     ),
-    totalLocalSat = 169_999L,
 )
 
 /**

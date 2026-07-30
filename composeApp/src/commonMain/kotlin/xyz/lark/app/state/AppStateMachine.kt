@@ -435,9 +435,7 @@ class AppStateMachine(
                 val count = snapshot.channels.size
                 val noun = if (count == 1) "channel" else "channels"
                 ChannelsModel(
-                    // R7: the rows sum to the bridge total, so the total is their sum — the
-                    // snapshot's totalLocalSat is the daemon's usable-only figure and diverges
-                    // from the visible rows whenever a channel is opening or unusable.
+                    // R7: the rows sum to the bridge total, so the total is their sum.
                     bridgeValue = "$count $noun · ${maskableBtc(snapshot.channels.sumOf { it.localSat }, s)}",
                     rows = snapshot.channels.map { renderChannelRow(it, s) },
                 )

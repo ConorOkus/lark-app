@@ -8,6 +8,7 @@ import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.gateway.BarkdApi
+import xyz.lark.app.core.gateway.BarkdApiVariant
 import xyz.lark.app.core.gateway.ForkWalletConfig
 import xyz.lark.app.core.gateway.GatewayLarkCore
 import xyz.lark.app.core.gateway.httpClientEngine
@@ -33,17 +34,30 @@ internal fun buildCore(
     engine: () -> HttpClientEngine = ::httpClientEngine,
 ): CoreSelection = when (mode) {
     CoreMode.DEMO -> FakeLarkCore().let { fake -> CoreSelection(core = fake, demo = fake) }
-    CoreMode.GATEWAY -> CoreSelection(
-        core = GatewayLarkCore(
-            api = BarkdApi(engine(), gatewayBaseUrl, variant = CoreConfig.apiVariant),
-            scope = scope,
-            expectedNetwork = expectedNetwork,
-            networkLabel = CoreConfig.networkLabel,
-            forkWallet = ForkWalletConfig(
-                arkServerUrl = CoreConfig.arkServerUrl,
-                esploraUrl = CoreConfig.chainSource,
+    CoreMode.GATEWAY -> {
+        // The fork constants move together (see CoreConfig's fork-mode block): fail fast on a
+        // partial edit instead of dying later as a silent, terminal NETWORK_MISMATCH.
+        if (CoreConfig.apiVariant == BarkdApiVariant.FORK_BETA6) {
+            require(CoreConfig.arkServerUrl.isNotBlank()) {
+                "FORK_BETA6 needs CoreConfig.arkServerUrl (see docs/gateway/local-mutinynet.md)"
+            }
+            require(CoreConfig.expectedNetwork == "signet") {
+                "FORK_BETA6 daemons identify as \"signet\" on the wire: set expectedNetwork = \"signet\"" +
+                    " and carry the product name in networkLabel (see docs/gateway/local-mutinynet.md)"
+            }
+        }
+        CoreSelection(
+            core = GatewayLarkCore(
+                api = BarkdApi(engine(), gatewayBaseUrl, variant = CoreConfig.apiVariant),
+                scope = scope,
+                expectedNetwork = expectedNetwork,
+                networkLabel = CoreConfig.networkLabel,
+                forkWallet = ForkWalletConfig(
+                    arkServerUrl = CoreConfig.arkServerUrl,
+                    esploraUrl = CoreConfig.chainSource,
+                ),
             ),
-        ),
-        demo = null,
-    )
+            demo = null,
+        )
+    }
 }

@@ -47,7 +47,6 @@ internal object Paths {
     const val ARK_INFO = "/api/v1/wallet/ark-info"
     const val NEXT_ADDRESS = "/api/v1/wallet/addresses/next"
     const val CHANNELS = "/api/v1/lightning/channels"
-    const val CHANNELS_BALANCE = "/api/v1/lightning/channels/balance"
 }
 
 /** Spec fixtures adjusted so the default script describes a healthy mutinynet wallet. */

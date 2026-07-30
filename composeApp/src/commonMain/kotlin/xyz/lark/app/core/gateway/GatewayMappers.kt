@@ -180,16 +180,15 @@ internal fun blockExpiryLabel(expiryHeight: Long?, tipHeight: Long): String =
     }
 
 /**
- * The channels snapshot the seam exposes (plan U4): [totalLocalSat] is the gateway's own
- * channels/balance figure, never re-derived client-side.
+ * The channels snapshot the seam exposes (plan U4). The bridge total the UI shows is the sum
+ * of the rows' local balances (R7: the rows sum to the total), so the snapshot carries only
+ * the rows — the daemon's separate usable-only aggregate is deliberately not fetched.
  */
 internal fun channelsSnapshot(
     channels: List<LightningChannelInfo>,
-    totalLocalSat: Long,
     tipHeight: Long,
 ): ChannelsSnapshot = ChannelsSnapshot(
     channels = channels.map { channelDisplay(it, tipHeight) },
-    totalLocalSat = totalLocalSat,
 )
 
 /**

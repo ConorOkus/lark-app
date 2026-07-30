@@ -156,8 +156,6 @@ object BarkdFixtures {
 
     val FORK_CHANNELS = "[$FORK_CHANNEL]"
 
-    const val FORK_CHANNELS_BALANCE = """{"balance_sat": 500000}"""
-
     // The address value stays within the bech32 charset: the app's fork receive path
     // validates it before embedding, and a healthy fixture must survive that check.
     const val FORK_NEXT_ADDRESS = """{"address": "ark1qf2knext"}"""
@@ -245,7 +243,7 @@ object BarkdFixtures {
      * Response fixture per endpoint path of the FORK_BETA6 surface. Every endpoint the fork
      * variant consumes is listed so the whole map validates against the fork spec: fork-shaped
      * fixtures where the wire differs ([FORK_VTXOS] — the fork's vtxo shape provably drifts
-     * from stock), and the shared constants where the schemas match ([MOVEMENT],
+     * from stock), and the shared constants where the schemas match ([SEND], [PENDING_ROUND],
      * [CREATE_WALLET], [CONNECTED], [TIP]).
      */
     val forkByPath: Map<String, String> = mapOf(
@@ -255,7 +253,8 @@ object BarkdFixtures {
         "/api/v1/wallet/ark-info" to FORK_ARK_INFO,
         "/api/v1/wallet/addresses/next" to FORK_NEXT_ADDRESS,
         "/api/v1/lightning/channels" to FORK_CHANNELS,
-        "/api/v1/lightning/channels/balance" to FORK_CHANNELS_BALANCE,
+        "/api/v1/wallet/send" to SEND,
+        "/api/v1/wallet/refresh/all" to PENDING_ROUND,
         "/api/v1/wallet/vtxos" to FORK_VTXOS,
         "/api/v1/wallet/connected" to CONNECTED,
         "/api/v1/bitcoin/tip" to TIP,
