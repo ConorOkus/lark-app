@@ -18,7 +18,7 @@ use std::sync::Arc;
 use bark::persist::sqlite::SqliteClient;
 use bark::onchain::OnchainWallet;
 use bark::{Config, Wallet};
-use bitcoin::Network;
+use bitcoin::{Amount, Network};
 use zeroize::Zeroize;
 
 use crate::backup;
@@ -147,6 +147,54 @@ impl LarkWallet {
         let addr = onchain.address().await.map_err(LarkError::from)?;
         Ok(addr.to_string())
     }
+
+    /// Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
+    /// recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
+    /// `sats` sets the amount for an amountless invoice. Returns a short summary.
+    pub async fn send_bolt11(&self, invoice: String, sats: u64) -> Result<String, LarkError> {
+        let user_amount = (sats > 0).then(|| Amount::from_sat(sats));
+        let send = self
+            .inner
+            .pay_lightning_invoice(invoice, user_amount)
+            .await
+            .map_err(LarkError::from)?;
+        Ok(format!("{send:?}"))
+    }
+
+    /// Board on-chain funds into the Ark (creates a VTXO). Enables a funded
+    /// in-process wallet; the boarded VTXO is spendable after board confirmations.
+    pub async fn board(&self, sats: u64) -> Result<String, LarkError> {
+        let mut onchain = self.onchain.lock().await;
+        let pending = self
+            .inner
+            .board_amount(&mut *onchain, Amount::from_sat(sats))
+            .await
+            .map_err(LarkError::from)?;
+        Ok(format!("{pending:?}"))
+    }
+
+    /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
+    pub async fn movements(&self) -> Result<Vec<MovementInfo>, LarkError> {
+        let movements = self.inner.movements().await.map_err(LarkError::from)?;
+        Ok(movements
+            .into_iter()
+            .map(|m| MovementInfo {
+                id: m.id.0,
+                status: format!("{:?}", m.status),
+                effective_balance_sat: m.effective_balance.to_sat(),
+                offchain_fee_sat: m.offchain_fee.to_sat(),
+            })
+            .collect())
+    }
+}
+
+/// A slim view of a bark `Movement` for the seam's activity list.
+#[derive(uniffi::Record)]
+pub struct MovementInfo {
+    pub id: u32,
+    pub status: String,
+    pub effective_balance_sat: i64,
+    pub offchain_fee_sat: u64,
 }
 
 #[uniffi::export]
