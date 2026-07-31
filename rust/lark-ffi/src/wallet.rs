@@ -39,6 +39,9 @@ impl Drop for TmpFileGuard<'_> {
 #[derive(uniffi::Object)]
 pub struct LarkWallet {
     inner: Wallet,
+    // The onchain (bdk) wallet, kept so we can derive deposit addresses. Behind
+    // a Mutex because its `address()` takes `&mut self`.
+    onchain: tokio::sync::Mutex<OnchainWallet>,
     seed64: [u8; 64],
     db_path: String,
     fingerprint: Vec<u8>,
@@ -103,7 +106,13 @@ pub async fn open_wallet(
     // `Wallet::fingerprint()` is the public accessor (WalletSeed::new is private).
     let fingerprint = wallet.fingerprint().to_string().into_bytes();
 
-    let out = Arc::new(LarkWallet { inner: wallet, seed64, db_path, fingerprint });
+    let out = Arc::new(LarkWallet {
+        inner: wallet,
+        onchain: tokio::sync::Mutex::new(onchain),
+        seed64,
+        db_path,
+        fingerprint,
+    });
     // Wipe this frame's copy of the seed; the struct keeps its own (zeroized on
     // Drop). bark's onchain wallet holds a further copy outside our control.
     seed64.zeroize();
@@ -123,6 +132,20 @@ impl LarkWallet {
     pub async fn refresh(&self) -> Result<(), LarkError> {
         self.inner.maintenance().await.map_err(LarkError::from)?;
         Ok(())
+    }
+
+    /// A fresh Ark receive address (the seam's `receiveCode` source). Requires a
+    /// synced server connection — this exercises a real captaind round-trip.
+    pub async fn mint_address(&self) -> Result<String, LarkError> {
+        let addr = self.inner.new_address().await.map_err(LarkError::from)?;
+        Ok(addr.to_string())
+    }
+
+    /// A fresh on-chain deposit address (the seam's `depositAddress`).
+    pub async fn deposit_address(&self) -> Result<String, LarkError> {
+        let mut onchain = self.onchain.lock().await;
+        let addr = onchain.address().await.map_err(LarkError::from)?;
+        Ok(addr.to_string())
     }
 }
 
