@@ -51,6 +51,9 @@ kotlin {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
             implementation(libs.ktor.client.okhttp)
+            // The generated UniFFI bindings (src/androidMain/kotlin/uniffi) import com.sun.jna.*.
+            // Android needs the @aar variant: it carries the Android .so set the device loads.
+            implementation("${libs.jna.get().module}:${libs.versions.jna.get()}@aar")
         }
         iosMain.dependencies {
             implementation(libs.ktor.client.darwin)
@@ -58,6 +61,10 @@ kotlin {
         androidUnitTest.dependencies {
             implementation(libs.junit)
             implementation(libs.robolectric)
+            // ...and the host JVM needs the plain jar, whose bundled natives are desktop
+            // builds. The @aar's natives are Android-only and cannot load on macOS, so the
+            // FFI unit-test lane would fail to initialise JNA without this. Both, not either.
+            implementation(libs.jna)
         }
     }
 }
@@ -91,4 +98,36 @@ android {
 
 dependencies {
     debugImplementation(compose.uiTooling)
+}
+
+// --- lark-ffi test lanes (plan U1) -----------------------------------------------------------
+// The FFI contract lanes load the real Rust library through JNA. Point JNA at the cargo host
+// artifact and forward the live-lane opt-in.
+//
+// The path MUST be absolute: a test JVM's working directory is the module directory, so the
+// relative string "rust/lark-ffi/target/debug" resolves to composeApp/rust/... and the library
+// is silently never found. `rootProject` anchors it to the repo root instead.
+val larkFfiHostLibDir: String =
+    rootProject.layout.projectDirectory.dir("rust/lark-ffi/target/debug").asFile.absolutePath
+
+/**
+ * Live-lane inputs, forwarded from the invoking shell rather than committed. `LARK_LIVE_FFI` is
+ * the opt-in; the rest configure it. `LARK_LIVE_MNEMONIC` is a funded wallet's seed words — real
+ * money — so it has no default here and never gets one (the same "empty by design" rule
+ * CoreConfig applies to gatewayBaseUrl/arkServerUrl). Absent values arrive as empty strings,
+ * which the lane reads as "not opted in" and skips on.
+ */
+val larkLiveLaneEnv = listOf(
+    "LARK_LIVE_FFI",
+    "LARK_LIVE_ARK_SERVER",
+    "LARK_LIVE_ESPLORA",
+    "LARK_LIVE_NETWORK",
+    "LARK_LIVE_MNEMONIC",
+)
+
+tasks.withType<Test>().configureEach {
+    systemProperty("jna.library.path", larkFfiHostLibDir)
+    larkLiveLaneEnv.forEach { key ->
+        environment(key, providers.environmentVariable(key).getOrElse(""))
+    }
 }
