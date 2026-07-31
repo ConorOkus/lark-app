@@ -50,8 +50,10 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('rust/fork-pins.toml', 'rust/lark-ffi/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      # protobuf provides protoc, which bark-server-rpc's build script needs to compile the
+      # captaind protos; xcodegen is for the iOS app build.
+      - name: Install XcodeGen and protobuf
+        run: brew install xcodegen protobuf
 
       - name: Run check set
         run: bash scripts/ci.sh

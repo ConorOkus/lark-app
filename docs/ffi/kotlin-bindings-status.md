@@ -3,6 +3,14 @@
 Status as of 2026-07-31. Companion to `docs/plans/2026-07-31-001-feat-ffi-lark-core-kotlin-plan.md`
 (M2 unit U2) and the parent plan `docs/plans/2026-07-30-001-feat-m2-ffi-core-cloud-backups-plan.md`.
 
+## Build prerequisites
+
+Beyond a Rust toolchain and the two pinned sibling fork checkouts, building the crate needs
+**`protoc`** — `bark-server-rpc`'s build script compiles the captaind protos with prost-build.
+`brew install protobuf` on macOS, `apt-get install -y protobuf-compiler` on Debian/Ubuntu, or point
+`PROTOC` at an existing binary. `scripts/build-rust.sh` checks for it up front, because without the
+check cargo fails deep inside a build script with a panic that reads like a crate bug.
+
 ## What is landed and verified
 
 - **JNA + build wiring.** `net.java.dev.jna` on `androidMain` (`@aar`, for device natives) and
