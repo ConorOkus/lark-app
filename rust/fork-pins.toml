@@ -11,7 +11,10 @@
 # so rust/lark-ffi resolves ../../../bark/bark and bark resolves ../rust-lightning.
 
 [bark]
-repo = "https://gitlab.com/gsanders87/bark"
+# The pinned SHA lives on ConorOkus/bark; gsanders87/bark (the upstream fork)
+# has advanced past this commit and no longer contains it. The captaind Fly
+# image (deploy/fly/captaind.Dockerfile) clones from this same remote.
+repo = "https://gitlab.com/ConorOkus/bark"
 branch = "ark-channels-bridge-test-fixes"
 sha = "38304d95f2bba98edee2560f2fc2a36f16f0d84f"
 
