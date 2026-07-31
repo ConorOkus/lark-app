@@ -6,6 +6,9 @@ android-targetSdk = "35"
 androidx-activity = "1.10.1"
 composeMultiplatform = "1.8.2"
 detekt = "1.23.8"
+# UniFFI 0.28's Kotlin backend loads the native library through JNA; 5.13 is its
+# documented floor. Two artifacts are needed, not one — see composeApp/build.gradle.kts.
+jna = "5.14.0"
 junit = "4.13.2"
 kotlin = "2.2.0"
 kotlinx-coroutines = "1.10.2"
@@ -20,6 +23,7 @@ robolectric = "4.14.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 junit = { module = "junit:junit", version.ref = "junit" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }

@@ -14,7 +14,10 @@ jobs:
     # macOS because the check set includes the Kotlin/Native iOS framework link
     # and the Xcode app build (scripts/ci.sh is the single source of truth).
     runs-on: macos-latest
-    timeout-minutes: 45
+    # Raised from 45 to accommodate the new Rust leg: a cold cache builds the bark + LDK forks in
+    # debug, which dominates the job. This is a ceiling to stop runaway jobs, not a target — tighten
+    # it once a few warm/cold runs have been measured.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -29,8 +32,28 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      # lark-ffi path-depends on two sibling fork checkouts pinned in rust/fork-pins.toml.
+      # Both remotes are public, so this needs no credential.
+      - name: Clone pinned forks
+        run: bash scripts/clone-forks.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Keyed on the pins: a fork bump invalidates the cache, an unrelated change reuses it.
+      # The bark + LDK debug build is the dominant cost of this job.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/lark-ffi/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/fork-pins.toml', 'rust/lark-ffi/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # protobuf provides protoc, which bark-server-rpc's build script needs to compile the
+      # captaind protos; xcodegen is for the iOS app build.
+      - name: Install XcodeGen and protobuf
+        run: brew install xcodegen protobuf
 
       - name: Run check set
         run: bash scripts/ci.sh

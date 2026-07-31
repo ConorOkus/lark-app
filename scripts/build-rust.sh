@@ -34,6 +34,17 @@ PARENT="$(cd "$REPO_ROOT/.." && pwd)"
 verify_fork bark "$PARENT/bark"
 verify_fork rust-lightning "$PARENT/rust-lightning"
 
+# --- verify build prerequisites --------------------------------------------
+# bark-server-rpc's build script compiles the captaind protos with prost-build, which shells out
+# to protoc. Without it cargo fails deep inside a build script with a panic that reads like a
+# crate bug, so check up front and say what to install.
+if [ -z "${PROTOC:-}" ] && ! command -v protoc >/dev/null 2>&1; then
+  echo "ERROR: protoc not found, but bark-server-rpc needs it to compile the captaind protos." >&2
+  echo "       macOS: 'brew install protobuf'; Debian/Ubuntu: 'apt-get install -y protobuf-compiler'." >&2
+  echo "       Or point PROTOC at an existing binary." >&2
+  exit 1
+fi
+
 # --- host build + tests (the every-PR gate) ---------------------------------
 echo "==> cargo build (host) + test"
 ( cd "$FFI_DIR" && cargo build && cargo test )
