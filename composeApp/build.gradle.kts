@@ -101,8 +101,7 @@ dependencies {
 }
 
 // --- lark-ffi test lanes (plan U1) -----------------------------------------------------------
-// The FFI contract lanes load the real Rust library through JNA. Point JNA at the cargo host
-// artifact and forward the live-lane opt-in.
+// The FFI lane loads the real Rust library through JNA, so point JNA at the cargo host artifact.
 //
 // The path MUST be absolute: a test JVM's working directory is the module directory, so the
 // relative string "rust/lark-ffi/target/debug" resolves to composeApp/rust/... and the library
@@ -111,23 +110,30 @@ val larkFfiHostLibDir: String =
     rootProject.layout.projectDirectory.dir("rust/lark-ffi/target/debug").asFile.absolutePath
 
 /**
- * Live-lane inputs, forwarded from the invoking shell rather than committed. `LARK_LIVE_FFI` is
- * the opt-in; the rest configure it. `LARK_LIVE_MNEMONIC` is a funded wallet's seed words — real
- * money — so it has no default here and never gets one (the same "empty by design" rule
- * CoreConfig applies to gatewayBaseUrl/arkServerUrl). Absent values arrive as empty strings,
- * which the lane reads as "not opted in" and skips on.
+ * Turns the FFI lane's "skip when the library is missing" into "fail when it is missing".
+ *
+ * The skip exists so `./gradlew` works without a Rust toolchain (plan R6) — but on a lane that is
+ * supposed to *prove* the Rust core works, a silent skip would let a green run mean nothing was
+ * verified (plan R7). `scripts/ci.sh` exports this whenever it runs the Rust leg, so the two
+ * behaviors cannot drift apart.
+ *
+ * Forwarded rather than read at configuration time so toggling it does not require a re-configure.
  */
-val larkLiveLaneEnv = listOf(
-    "LARK_LIVE_FFI",
-    "LARK_LIVE_ARK_SERVER",
-    "LARK_LIVE_ESPLORA",
-    "LARK_LIVE_NETWORK",
-    "LARK_LIVE_MNEMONIC",
-)
+val requireFfiEnvVar = "LARK_REQUIRE_FFI"
+val ffiLaneRequired: Boolean =
+    providers.environmentVariable(requireFfiEnvVar).getOrElse("") == "1"
 
 tasks.withType<Test>().configureEach {
     systemProperty("jna.library.path", larkFfiHostLibDir)
-    larkLiveLaneEnv.forEach { key ->
-        environment(key, providers.environmentVariable(key).getOrElse(""))
+    environment(requireFfiEnvVar, if (ffiLaneRequired) "1" else "")
+    if (ffiLaneRequired) {
+        // The native library is reached through a system-property path, so Gradle cannot see it as
+        // an input — measured: hiding the library leaves this task UP-TO-DATE, and a prior run's
+        // result is even served FROM-CACHE. Either way a run where the FFI lane skipped is
+        // indistinguishable from one where it passed, which is exactly how a required lane goes
+        // green having verified nothing. On the required lane, force real execution; `scripts/ci.sh`
+        // then asserts the lane reported zero skips (plan R7).
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
     }
 }

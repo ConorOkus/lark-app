@@ -32,10 +32,10 @@ abstract class LarkCoreContractTest : LarkCoreLifecycleContractTest() {
         val fixture = fixture()
         val core = fixture.settledWithWallet()
         val before = core.balanceSats.value
-        fixture.acknowledgeDebit(before - SEND_SATS)
-        assertEquals(SendResult.Success, core.send(RECIPIENT, SEND_SATS))
+        fixture.acknowledgeDebit(before - CONTRACT_SEND_SATS)
+        assertEquals(SendResult.Success, core.send(CONTRACT_RECIPIENT, CONTRACT_SEND_SATS))
         fixture.settle()
-        assertEquals(before - SEND_SATS, core.balanceSats.value)
+        assertEquals(before - CONTRACT_SEND_SATS, core.balanceSats.value)
     }
 
     @Test
@@ -43,7 +43,7 @@ abstract class LarkCoreContractTest : LarkCoreLifecycleContractTest() {
         val fixture = fixture()
         val core = fixture.settledWithWallet()
         fixture.acknowledgeDebit(0)
-        assertEquals(SendResult.Success, core.send(RECIPIENT, core.balanceSats.value))
+        assertEquals(SendResult.Success, core.send(CONTRACT_RECIPIENT, core.balanceSats.value))
         fixture.settle()
         assertEquals(0L, core.balanceSats.value)
     }

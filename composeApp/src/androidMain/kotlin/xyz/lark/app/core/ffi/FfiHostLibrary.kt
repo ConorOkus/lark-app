@@ -19,6 +19,22 @@ internal object FfiHostLibrary {
         "lark_ffi host library not loadable — build it with scripts/build-rust.sh " +
             "(needs the rust/fork-pins.toml sibling checkouts). Skipping the FFI lane."
 
+    const val REQUIRED_FAILURE_MESSAGE: String =
+        "lark_ffi host library not loadable, but LARK_REQUIRE_FFI=1 — this lane must verify the " +
+            "Rust core, not skip it. A green run here would mean the in-process wallet went " +
+            "unverified. Check that scripts/build-rust.sh produced the library and that " +
+            "jna.library.path points at it."
+
+    /**
+     * Whether an absent library must FAIL rather than skip.
+     *
+     * `scripts/ci.sh` sets this whenever it runs the Rust leg. Without it, a runner where the
+     * library builds but cannot be loaded (wrong arch, wrong path, JNA init failure) would skip
+     * the whole FFI lane and still report green — the exact silent pass the required lane exists
+     * to prevent.
+     */
+    val required: Boolean get() = System.getenv("LARK_REQUIRE_FFI") == "1"
+
     val available: Boolean by lazy {
         // UnsatisfiedLinkError / ExceptionInInitializerError on a missing library are Errors, not
         // Exceptions, so runCatching's Throwable catch is the point — a narrower catch would let

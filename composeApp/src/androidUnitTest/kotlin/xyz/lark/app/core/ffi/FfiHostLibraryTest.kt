@@ -7,6 +7,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * What the `lark-ffi` host library actually does from Kotlin over JNA — the foundation every
@@ -17,15 +18,16 @@ import kotlin.test.assertTrue
  * **which wallet operations need which backend**, which is the fact that decides what a per-PR
  * contract lane can honestly assert.
  *
- * All of it skips (never fails) when the host library is absent, so
- * `./gradlew :composeApp:testDebugUnitTest` stays green on a checkout with no Rust toolchain and
- * no fork clones (plan R6).
+ * When the host library is absent these skip, so `./gradlew :composeApp:testDebugUnitTest` stays
+ * green on a checkout with no Rust toolchain and no fork clones (plan R6) — except on a lane that
+ * set `LARK_REQUIRE_FFI=1`, where an absent library fails instead (plan R7). See
+ * [requireHostLibrary].
  */
 class FfiHostLibraryTest {
 
     @Test
     fun theHostLibraryLoadsAndReachesRust() {
-        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, FfiHostLibrary.available)
+        requireHostLibrary()
         val words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT)
         assertEquals(MNEMONIC_WORDS, words.size)
         assertTrue(words.all { it.isNotBlank() }, "a real mnemonic has no blank words")
@@ -33,7 +35,7 @@ class FfiHostLibraryTest {
 
     @Test
     fun rustErrorsSurfaceAsTypedKotlinExceptions() {
-        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, FfiHostLibrary.available)
+        requireHostLibrary()
         // The crate rejects any word count that is not 12 or 24 with LarkError::Invalid; proving it
         // arrives as a typed LarkException (not a crash, not a bare Throwable) is what lets a
         // caller treat FFI failure as a normal, catchable outcome.
@@ -54,7 +56,7 @@ class FfiHostLibraryTest {
      */
     @Test
     fun walletCreationNeedsAChainSourceButNoArkServer() = runBlocking {
-        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, FfiHostLibrary.available)
+        requireHostLibrary()
         StubEsplora.start().use { esplora ->
             withDatadir { datadir ->
                 uniffi.lark_ffi.openWallet(
@@ -80,7 +82,7 @@ class FfiHostLibraryTest {
      */
     @Test
     fun onlyArkDependentOperationsFailWithoutAnArkServer() = runBlocking {
-        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, FfiHostLibrary.available)
+        requireHostLibrary()
         StubEsplora.start().use { esplora ->
             withDatadir { datadir ->
                 uniffi.lark_ffi.openWallet(
@@ -117,7 +119,7 @@ class FfiHostLibraryTest {
      */
     @Test
     fun theChainSourceSurfaceIsOnlyTheStubbedEndpoints() = runBlocking {
-        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, FfiHostLibrary.available)
+        requireHostLibrary()
         StubEsplora.start().use { esplora ->
             withDatadir { datadir ->
                 uniffi.lark_ffi.openWallet(
@@ -130,6 +132,11 @@ class FfiHostLibraryTest {
                     wallet.balanceSats()
                     wallet.depositAddress()
                     wallet.movements()
+                    // Maintenance is what reaches for the tip and fee estimates, so without it
+                    // this test would only ever exercise the genesis lookup and would pass even if
+                    // the other two stubbed endpoints were removed. Its success is not the point
+                    // here (it needs an Ark server) — the request paths are.
+                    runCatching { wallet.refresh() }
                 }
                 assertTrue(
                     esplora.unknownPathsRequested.isEmpty(),
@@ -138,6 +145,21 @@ class FfiHostLibraryTest {
                 )
             }
         }
+    }
+
+    /**
+     * Skips when the host library is absent — unless this lane is required, in which case an
+     * absent library is a failure.
+     *
+     * Skipping is right for a developer without a Rust toolchain (plan R6). It is wrong on the
+     * required CI lane: a runner where the library builds but will not load would skip every
+     * assertion here and still go green, so `scripts/ci.sh` sets `LARK_REQUIRE_FFI=1` and this
+     * turns the skip into a hard failure (plan R7).
+     */
+    private fun requireHostLibrary() {
+        if (FfiHostLibrary.available) return
+        if (FfiHostLibrary.required) fail(FfiHostLibrary.REQUIRED_FAILURE_MESSAGE)
+        assumeTrue(FfiHostLibrary.SKIP_MESSAGE, false)
     }
 
     /**

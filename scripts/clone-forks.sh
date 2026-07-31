@@ -35,6 +35,21 @@ clone_fork() {
     exit 1
   fi
 
+  # Refuse to move someone's in-progress fork work out from under them — but only when a move is
+  # actually needed, and only for TRACKED modifications. Untracked files survive a checkout, and a
+  # checkout already sitting on the pin has nothing to move; treating either as a blocker would
+  # break a working developer setup for no reason.
+  if [ -d "$dir/.git" ]; then
+    local head_now
+    head_now="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+    if [ "$head_now" != "$sha" ] &&
+       [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
+      echo "ERROR: $dir has uncommitted tracked changes and is not on the pinned commit;" >&2
+      echo "       refusing to move it. Commit/stash them, or check out $sha there yourself." >&2
+      exit 1
+    fi
+  fi
+
   if [ ! -d "$dir/.git" ]; then
     echo "==> cloning $name from $repo ($branch)"
     git clone --quiet --branch "$branch" "$repo" "$dir"

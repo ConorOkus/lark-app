@@ -11,9 +11,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-internal const val RECIPIENT = "ark1qf7demo"
-internal const val SEND_SATS = 520L
-internal const val MIN_MNEMONIC_WORDS = 12
+internal const val CONTRACT_RECIPIENT = "ark1qf7demo"
+internal const val CONTRACT_SEND_SATS = 520L
+internal const val CONTRACT_MIN_MNEMONIC_WORDS = 12
 
 /**
  * The half of the [LarkCore] seam contract a wallet with **no funds** can satisfy: lifecycle,
@@ -118,7 +118,7 @@ abstract class LarkCoreLifecycleContractTest {
         fixture.settle()
         val words = core.backupWords
         assertTrue(
-            words.isEmpty() || words.size >= MIN_MNEMONIC_WORDS,
+            words.isEmpty() || words.size >= CONTRACT_MIN_MNEMONIC_WORDS,
             "either no words (words-unavailable) or a real mnemonic, never a stub: $words",
         )
     }
@@ -129,7 +129,7 @@ abstract class LarkCoreLifecycleContractTest {
     fun sendRejectsZeroSatsAndLeavesTheBalanceUnchanged() = runContractTest {
         val core = fixture().settledWithWallet()
         val before = core.balanceSats.value
-        assertEquals(SendResult.Failure, core.send(RECIPIENT, 0))
+        assertEquals(SendResult.Failure, core.send(CONTRACT_RECIPIENT, 0))
         assertEquals(before, core.balanceSats.value)
     }
 
@@ -137,7 +137,7 @@ abstract class LarkCoreLifecycleContractTest {
     fun sendRejectsNegativeSatsAndLeavesTheBalanceUnchanged() = runContractTest {
         val core = fixture().settledWithWallet()
         val before = core.balanceSats.value
-        assertEquals(SendResult.Failure, core.send(RECIPIENT, -SEND_SATS))
+        assertEquals(SendResult.Failure, core.send(CONTRACT_RECIPIENT, -CONTRACT_SEND_SATS))
         assertEquals(before, core.balanceSats.value)
     }
 
@@ -145,7 +145,7 @@ abstract class LarkCoreLifecycleContractTest {
     fun sendRejectsMoreThanTheBalanceAndLeavesItUnchanged() = runContractTest {
         val core = fixture().settledWithWallet()
         val before = core.balanceSats.value
-        assertEquals(SendResult.Failure, core.send(RECIPIENT, before + 1))
+        assertEquals(SendResult.Failure, core.send(CONTRACT_RECIPIENT, before + 1))
         assertEquals(before, core.balanceSats.value)
     }
 
