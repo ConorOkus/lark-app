@@ -1,0 +1,20 @@
+app = "lark-bitcoind"
+primary_region = "iad"
+# Deploy from repo root with: fly deploy . -c deploy/fly/fly.bitcoind.toml \
+#   --dockerfile deploy/fly/bitcoind.Dockerfile   (COPY paths need repo-root context)
+
+[env]
+  DATA_DIR = "/data/bitcoin"
+  DBCACHE = "1000"
+
+# RPC (38332) is intentionally NOT published — captaind reaches it over the
+# private 6PN at lark-bitcoind.internal. No [[services]] block = no public port
+# and no autostop, so the node stays always-on (required for chain sync).
+
+[[mounts]]
+  source = "bitcoin_data"
+  destination = "/data/bitcoin"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4096"
