@@ -1,0 +1,94 @@
+# captaind on mutinynet (custom signet, 30s blocks) — Fly deploy template.
+# Derived verbatim from the known-good local mutinynet captaind.toml; only the
+# data_dir, listen/rpc bind addresses, [postgres], and [bitcoind] blocks are
+# adjusted for Fly. The entrypoint substitutes __PLACEHOLDER__ values from env.
+# Every struct is #[serde(deny_unknown_fields)] — do not add stray keys.
+
+data_dir = "/data/captaind"
+network = "signet"
+
+vtxo_lifetime = 8640
+vtxo_exit_delta = 144
+
+min_board_amount = "20000 sat"
+max_arkoor_depth = 5
+max_arkoor_fanout = 4
+required_board_confirmations = 3
+round_tx_untrusted_input_confirmations = 2
+
+rpc_rich_errors = true
+txindex_check_interval = "30s"
+sync_manager_block_poll_interval = "1s"
+forfeit_watcher_min_balance = "100000 sat"
+transaction_rebroadcast_interval = "1m"
+otel_deployment_name = "lark_mutinynet"
+
+round_interval = "30s"
+round_submit_time = "10s"
+round_sign_time = "10s"
+nb_round_nonces = 8
+round_forfeit_nonces_timeout = "30s"
+
+offboard_feerate = "7sat/vb"
+offboard_fixed_fee_vb = 212
+offboard_session_timeout = "30s"
+
+cln_reconnect_interval = "10s"
+invoice_check_interval = "3s"
+invoice_recheck_delay = "2s"
+invoice_check_base_delay = "10s"
+invoice_check_max_delay = "10m"
+invoice_poll_interval = "30s"
+track_all_base_delay = "1s"
+track_all_max_delay = "60s"
+htlc_expiry_delta = 40
+htlc_send_expiry_delta = 258
+max_user_invoice_cltv_delta = 250
+invoice_expiry = "48h"
+receive_htlc_forward_timeout = "30s"
+ln_receive_anti_dos_required = false
+
+[ldk]
+enabled = true
+listen_address = "0.0.0.0:9735"
+
+[vtxo_sweeper]
+enabled = true
+round_sweep_interval = "1h"
+sweep_threshold = 1000000
+
+[forfeit_watcher]
+enabled = true
+wake_interval = "1m"
+
+[vtxopool]
+vtxo_targets = [ "1000sat:10", "10000sat:10" ]
+vtxo_target_issue_threshold = 80
+vtxo_lifetime = 2880
+vtxo_pre_expiry = 288
+vtxo_max_arkoor_depth = 3
+issue_interval = "1m"
+
+[fee_estimator]
+update_interval = "1m"
+fallback_fee_rate_fast = "25sat/vb"
+fallback_fee_rate_regular = "10sat/vb"
+fallback_fee_rate_slow = "4sat/vb"
+
+[rpc]
+public_address = "0.0.0.0:3535"
+admin_address = "127.0.0.1:3536"
+integration_address = "127.0.0.1:3537"
+
+[postgres]
+host = "__PG_HOST__"
+port = __PG_PORT__
+name = "__PG_NAME__"
+user = "__PG_USER__"
+password = "__PG_PASS__"
+max_connections = 10
+
+[bitcoind]
+url = "__BITCOIND_URL__"
+rpc_user = "__BITCOIND_RPC_USER__"
+rpc_pass = "__BITCOIND_RPC_PASS__"

@@ -1,0 +1,45 @@
+app = "lark-captaind"
+primary_region = "iad"
+# Deploy from repo root with: fly deploy . -c deploy/fly/fly.captaind.toml \
+#   --dockerfile deploy/fly/captaind.Dockerfile   (COPY paths need repo-root context)
+
+[env]
+  DATA_DIR = "/data/captaind"
+  PG_PORT = "5432"
+  # Dedicated DB — the default `postgres` db carries Fly's repmgr.* tables, which
+  # trip captaind's "database must be empty" check on create.
+  PG_NAME = "captaind"
+  PG_USER = "postgres"
+  # PG_HOST, PG_PASS, BITCOIND_URL, BITCOIND_RPC_USER, BITCOIND_RPC_PASS via secrets.
+
+[[mounts]]
+  source = "captaind_data"
+  destination = "/data/captaind"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048"
+
+# Ark gRPC (raw h2c on 3535). TLS is a KNOWN follow-up: Fly's edge proxy cannot
+# cleanly terminate TLS for gRPC to an h2c backend — the `tls` handler won't
+# negotiate h2 ALPN, and `["tls","http"]` downgrades to HTTP/1.1 to the backend
+# (502). The fix is a ghostunnel sidecar (edge raw-TCP passthrough -> sidecar
+# terminates TLS + h2 ALPN -> h2c to captaind) with a publicly-trusted (ACME)
+# cert, since the bark client validates against system roots (no custom-CA flag).
+# Until then, the app's R4 (TLS to non-loopback) is not yet satisfiable here.
+[[services]]
+  protocol = "tcp"
+  internal_port = 3535
+  auto_stop_machines = false
+  min_machines_running = 1
+  [[services.ports]]
+    port = 3535
+
+# LDK p2p — needs a stable public address (dedicated IPv4 allocated at deploy).
+[[services]]
+  protocol = "tcp"
+  internal_port = 9735
+  auto_stop_machines = false
+  min_machines_running = 1
+  [[services.ports]]
+    port = 9735
