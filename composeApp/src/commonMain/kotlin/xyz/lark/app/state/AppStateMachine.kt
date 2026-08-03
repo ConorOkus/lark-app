@@ -74,6 +74,13 @@ private data class MachineState(
     val wordsRevealed: Boolean = false,
     val countdown: Int = COUNTDOWN_SECONDS,
     val copied: Boolean = false,
+    /** The amount Get paid is currently requesting; 0 means the amountless code. */
+    val receiveRequestSats: Long = 0L,
+    /**
+     * The code the core returned for [receiveRequestSats]. Held in state because minting is a
+     * suspending call and rendering must stay pure — null falls back to the core's own code.
+     */
+    val receiveCode: String? = null,
 )
 
 /**
@@ -105,6 +112,7 @@ class AppStateMachine(
     private var workJob: Job? = null
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
+    private var receiveCodeJob: Job? = null
 
     init {
         // The core is the source of truth for wallet facts; a real (push-based) core emits
@@ -195,7 +203,44 @@ class AppStateMachine(
     fun keypadConfirm() {
         val s = state
         if (s.digits.isEmpty() || isOverBalance(s)) return
-        if (s.mode == KeypadMode.RECEIVE) back() else push(Route.REVIEW)
+        if (s.mode == KeypadMode.RECEIVE) {
+            requestReceiveAmount(typedSats(s))
+            back()
+        } else {
+            push(Route.REVIEW)
+        }
+    }
+
+    /**
+     * Asks the core for a code that requests [sats] — which a core with channels answers with a
+     * BIP-321 URI carrying a Lightning invoice as well as the Ark address.
+     *
+     * The amount is recorded immediately so the screen can state what it is asking for, while the
+     * code arrives asynchronously (minting is a network call). Until it lands, the amountless
+     * code stands: never a blank screen, and never a stale code attributed to a new amount.
+     */
+    private fun requestReceiveAmount(sats: Long) {
+        update { it.copy(receiveRequestSats = sats, receiveCode = null) }
+        receiveCodeJob?.cancel()
+        receiveCodeJob = scope.launch {
+            val code = core.requestReceiveCode(sats)
+            // A later request (or a clear) wins: only apply while this amount is still the ask.
+            update { if (it.receiveRequestSats == sats) it.copy(receiveCode = code) else it }
+        }
+    }
+
+    /** Drops the requested amount, returning Get paid to the amountless code. */
+    fun clearReceiveAmount() {
+        receiveCodeJob?.cancel()
+        update { it.copy(receiveRequestSats = 0L, receiveCode = null) }
+    }
+
+    /**
+     * Get paid's amount affordance: set one when there is none, drop it when there is. The
+     * decision lives here rather than in the screen, which stays a thin renderer.
+     */
+    fun toggleReceiveAmount() {
+        if (state.receiveRequestSats > 0L) clearReceiveAmount() else goReceiveAmount()
     }
 
     // --- Send flow ---
@@ -574,10 +619,15 @@ class AppStateMachine(
         )
     }
 
+    /**
+     * The requested-amount code when one has landed, else the core's amountless code — so the
+     * QR and the code box always show the same live string (the one-source rule).
+     */
     private fun renderReceive(s: MachineState): ReceiveModel = ReceiveModel(
-        code = core.receiveCode,
+        code = s.receiveCode ?: core.receiveCode,
         copied = s.copied,
         copyLabel = if (s.copied) "Copied" else "Copy",
+        requestedAmount = if (s.receiveRequestSats > 0L) primary(s.receiveRequestSats, s.denomination) else null,
     )
 
     private fun renderDemoHealth(): List<DemoHealthOption>? {

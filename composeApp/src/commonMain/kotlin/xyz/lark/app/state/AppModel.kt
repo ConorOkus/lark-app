@@ -95,6 +95,12 @@ data class ReceiveModel(
     val code: String,
     val copied: Boolean,
     val copyLabel: String,
+    /**
+     * The amount this code is asking for, already formatted; null when Get paid is asking for
+     * any amount. Shown so the QR's meaning is visible — a code that requests a specific sum
+     * looks identical to one that does not.
+     */
+    val requestedAmount: String? = null,
 )
 
 /**

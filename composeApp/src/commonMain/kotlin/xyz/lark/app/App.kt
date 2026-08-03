@@ -150,7 +150,7 @@ private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) = ReceiveScr
     receive = model.receive,
     onBack = machine::back,
     onCopy = machine::copyCode,
-    onSetAmount = machine::goReceiveAmount,
+    onToggleAmount = machine::toggleReceiveAmount,
 )
 
 /** The BACKUP branch: binds [BackupScreen]'s callbacks to the machine's intents. */

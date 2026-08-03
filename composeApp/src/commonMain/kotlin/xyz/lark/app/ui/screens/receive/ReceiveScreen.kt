@@ -74,7 +74,7 @@ fun ReceiveScreen(
     receive: ReceiveModel,
     onBack: () -> Unit,
     onCopy: () -> Unit,
-    onSetAmount: () -> Unit,
+    onToggleAmount: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -98,6 +98,7 @@ fun ReceiveScreen(
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
         ) {
             ReceiveQr(code = receive.code)
+            RequestedAmount(amount = receive.requestedAmount)
             TextBlock()
             CodeBox(code = receive.code)
         }
@@ -112,8 +113,8 @@ fun ReceiveScreen(
                 height = CtaHeight,
             )
             GoldPillButton(
-                text = "Set amount",
-                onClick = onSetAmount,
+                text = if (receive.requestedAmount == null) "Set amount" else "Any amount",
+                onClick = onToggleAmount,
                 modifier = Modifier.weight(1f),
                 height = CtaHeight,
             )
@@ -154,6 +155,21 @@ private fun ReceiveQr(code: String) {
             .background(Color.White)
             .padding(QrCardPadding)
             .size(QrSize),
+    )
+}
+
+/**
+ * The amount this code requests, when it requests one. Absent for the amountless code rather
+ * than rendered as a zero — the code genuinely asks for any amount, and "₿0" would be a lie.
+ */
+@Composable
+private fun RequestedAmount(amount: String?) {
+    if (amount == null) return
+    Text(
+        text = "Requesting $amount",
+        style = LarkTheme.typography.itemTitle.copy(fontSize = 16.sp, lineHeight = 20.sp),
+        color = LarkColors.TextPrimary,
+        textAlign = TextAlign.Center,
     )
 }
 
