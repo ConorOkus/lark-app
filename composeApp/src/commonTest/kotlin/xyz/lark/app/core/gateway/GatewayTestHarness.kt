@@ -197,6 +197,36 @@ internal fun TestScope.advanceThrough(duration: Duration) {
     runCurrent()
 }
 
+/** One VTXO's varying fields for [vtxosJson]; everything else is fixed spec shape. */
+internal data class VtxoFixture(
+    val expiryHeight: Long,
+    val state: String = "spendable",
+    val amountSat: Long = 103_087,
+)
+
+/**
+ * A `GET /api/v1/wallet/vtxos` body with the given VTXOs.
+ *
+ * Expiry *and* state both vary because the staleness rule reads both: only spendable VTXOs can
+ * join a refresh round, so only they may raise the "needs a moment" banner.
+ */
+internal fun vtxosJson(vararg vtxos: VtxoFixture): String =
+    vtxos.mapIndexed { index, vtxo ->
+        """
+        {
+          "id": "${index.toString().repeat(64)}:0",
+          "amount_sat": ${vtxo.amountSat},
+          "policy_type": "pubkey",
+          "user_pubkey": "02aa",
+          "server_pubkey": "02bb",
+          "expiry_height": ${vtxo.expiryHeight},
+          "exit_delta": 12,
+          "chain_anchor": "${"4".repeat(64)}:1",
+          "state": {"type": "${vtxo.state}"}
+        }
+        """.trimIndent()
+    }.joinToString(prefix = "[", separator = ",", postfix = "]")
+
 internal fun BarkdScript.countOf(path: String): Int = seen.count { it.url.encodedPath == path }
 
 internal fun BarkdScript.requests(path: String): List<HttpRequestData> = seen.filter { it.url.encodedPath == path }
