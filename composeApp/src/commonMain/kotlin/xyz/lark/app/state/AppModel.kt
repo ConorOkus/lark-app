@@ -58,7 +58,12 @@ data class SendModel(
     val recipientName: String,
     val recipientHandle: String,
     val inputDisplay: String,
+    /** True only when the input is recognized as something payable — drives Continue. */
     val inputResolved: Boolean,
+    /** The line under the input card: what was recognized, or that nothing was. */
+    val inputSummary: String = "",
+    /** The destination carries its own amount, so the keypad is skipped and cannot override it. */
+    val fixedAmount: Boolean = false,
 )
 
 /** One pre-formatted activity row; [amount] is signed in the current denomination. */

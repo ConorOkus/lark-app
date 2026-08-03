@@ -11,6 +11,10 @@ import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.MoneyFormat
+// Pure destination classification, kept beside the resolver and invoice parser it composes so the
+// input screen and the send path cannot disagree about what counts as payable.
+import xyz.lark.app.core.gateway.SendInput
+import xyz.lark.app.core.gateway.classifySendInput
 import xyz.lark.app.core.model.ChannelDisplay
 import xyz.lark.app.core.model.ChannelState
 import xyz.lark.app.core.model.Contact
@@ -25,7 +29,6 @@ private const val ONE_SECOND_MILLIS = 1_000L
 private const val COPY_FLIP_MILLIS = 1_600L
 private const val DEFAULT_RECIPIENT = "Jack"
 private const val INPUT_PLACEHOLDER = "Name, invoice or address"
-private const val PASTED_HANDLE = "jack@lark.money"
 private const val SCAN_NAME = "Ferry Building Coffee"
 private const val SCAN_HANDLE = "ferry@sq.link"
 private const val SCAN_SATS = 520L
@@ -257,8 +260,34 @@ class AppStateMachine(
         push(Route.AMOUNT)
     }
 
-    /** The paste affordance resolves the demo invoice: jack@lark.money / Jack. */
-    fun pasteInvoice() = update { it.copy(input = PASTED_HANDLE, sendWho = DEFAULT_RECIPIENT) }
+    /**
+     * Sets the recipient from what the user typed or pasted.
+     *
+     * [raw] is kept verbatim so the field stays editable; resolution is derived in [renderSend]
+     * rather than stored, so screen and core can never disagree about what is payable. The name
+     * is cleared because a raw destination has none — the render falls back to its abbreviation.
+     */
+    fun setSendInput(raw: String) = update {
+        it.copy(input = raw, sendWho = "", scannedSats = null, digits = "")
+    }
+
+    /**
+     * Continue from the recipient screen.
+     *
+     * An amount-bearing invoice fixes what will be paid, so it goes straight to review rather
+     * than through the keypad — offering to type an amount there would imply the user could
+     * change it, and `ldk-pay` would pay the invoice's figure regardless. Anything without its
+     * own amount goes to the keypad as before.
+     */
+    fun continueFromSendInput() {
+        val fixedAmount = classifySendInput(state.input).amountSat
+        if (fixedAmount == null) {
+            goSendAmount()
+            return
+        }
+        update { it.copy(digits = "", scannedSats = fixedAmount, mode = KeypadMode.SEND) }
+        push(Route.REVIEW)
+    }
 
     /** Picking a recent pre-fills the recipient and jumps to a fresh send keypad. */
     fun pickRecent(contact: Contact) {
@@ -562,12 +591,30 @@ class AppStateMachine(
         )
     }
 
-    private fun renderSend(s: MachineState): SendModel = SendModel(
-        recipientName = s.sendWho,
-        recipientHandle = s.input,
-        inputDisplay = s.input.ifEmpty { INPUT_PLACEHOLDER },
-        inputResolved = s.input.isNotEmpty(),
-    )
+    /**
+     * [SendModel.inputResolved] means *recognized as payable*, not merely non-empty: the Continue
+     * pill and the gold border key off it, so treating unparseable text as resolved would invite
+     * a send the core is going to refuse.
+     */
+    private fun renderSend(s: MachineState): SendModel {
+        val input = classifySendInput(s.input)
+        return SendModel(
+            recipientName = s.sendWho.ifEmpty { input.display },
+            recipientHandle = s.input,
+            inputDisplay = s.input.ifEmpty { INPUT_PLACEHOLDER },
+            inputResolved = input.isResolved,
+            inputSummary = sendInputSummary(s, input),
+            fixedAmount = input.amountSat != null,
+        )
+    }
+
+    /** The line under the input card: what was recognized, or that nothing was. */
+    private fun sendInputSummary(s: MachineState, input: SendInput): String = when {
+        s.input.isBlank() -> "A name, an invoice, or a bitcoin address — LARK works out the rest."
+        !input.isResolved -> "That doesn’t look like an invoice or address LARK can pay."
+        input.amountSat != null -> "Invoice for ${primary(input.amountSat, s.denomination)}."
+        else -> "Ready to pay ${input.display}."
+    }
 
     private fun renderTxDetail(s: MachineState): TxDetailModel {
         val tx = core.activity.getOrNull(s.txIndex) ?: core.activity.firstOrNull()

@@ -102,6 +102,12 @@ internal fun arkReceiveUri(address: String): String? =
     if (ARK_ADDRESS_SHAPE.matches(address)) "$BIP321_SCHEME?$ARK_PARAM=$address" else null
 
 /**
+ * Whether [value] has the bech32 shape an Ark address (or a BOLT12 offer) uses: a lowercase
+ * human-readable part, the `1` separator, then bech32 data. Shape only — not a checksum check.
+ */
+internal fun isBech32Shaped(value: String): Boolean = ARK_ADDRESS_SHAPE.matches(value.lowercase())
+
+/**
  * Adds a `lightning=` destination to an ark receive URI, so one code serves an Ark wallet and a
  * Lightning-only wallet. `ark` stays first because the app's own send-side parser prefers it.
  *
@@ -252,7 +258,7 @@ private fun parsedTime(rfc3339: String): Instant? = runCatching { Instant.parse(
 private fun counted(count: Long, unit: String): String = if (count == 1L) "1 $unit" else "$count ${unit}s"
 
 /** Lightning addresses read as names; long ark/BOLT11 strings abbreviate to head…tail. */
-private fun displayName(destination: String): String =
+internal fun displayName(destination: String): String =
     if (destination.contains('@')) destination else abbreviated(destination)
 
 /** Head…tail abbreviation for long identifiers (destinations, channel ids); short ones stay whole. */
