@@ -1,0 +1,4 @@
+module lark_ffiFFI {
+    header "lark_ffiFFI.h"
+    export *
+}
