@@ -134,6 +134,26 @@ class ChannelRoutingTest {
         )
     }
 
+/**
+     * The live configuration, as a regression: the real invoice the hosted stack minted, against
+     * the real channel it opened (1,000,000 sat capacity, half pushed to the counterparty). This
+     * is the exact combination the deployed stack presents, so a routing change that stops
+     * recognizing it would be a live regression rather than a hypothetical one.
+     */
+    @Test
+    fun theLiveInvoiceAndChannelShapeRouteOverTheChannel() {
+        val liveChannel = channel(capacitySat = 1_000_000L, localBalanceMsat = 500_000_000L)
+        val liveInvoice = signetInvoice(hrpAmount = "100u") // 10,000 sat, as minted
+
+        assertEquals(
+            SendRoute.OverChannel(liveInvoice),
+            route(destination = liveInvoice, sats = 10_000L, channels = listOf(liveChannel)),
+        )
+        // And the counterparty half is what makes receiving possible at all.
+        assertEquals(500_000L, inboundLiquiditySat(listOf(liveChannel)))
+        assertEquals(500_000L, outboundLiquiditySat(listOf(liveChannel)))
+    }
+
     // --- Liquidity arithmetic ---
 
     /** An opening channel's capacity is not spendable, however large it is. */

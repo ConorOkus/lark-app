@@ -158,6 +158,27 @@ class Bolt11Test {
         assertEquals(Bolt11.Unrecognized, parseBolt11(invoice("lntbs500x")))
     }
 
+
+    /**
+     * A real invoice minted by the hosted stack's own LDK node (2026-08-03, 10,000 sat).
+     *
+     * This pins the one thing the parser could not settle from the spec alone: that mutinynet
+     * really does use the `lntbs` signet prefix, and that its amount arrives as `100u` rather
+     * than some other multiplier. If either were different, every genuine invoice would read as
+     * unrecognized and silently route over Ark instead of the channel.
+     */
+    @Test
+    fun aRealMutinynetInvoiceParsesToItsSignetNetworkAndAmount() {
+        val minted =
+        "lntbs100u1p48p5rkpp54a3u4rwj2fnat5pjfaaq0t079h2427vujlyxqvh0arxu294dxeyssp5ls8whjj4a3nz9" +
+        "lsc425xjv97zazk3hckwwnkuu376rxvxpdp4kes9qrsgqcqzf6np4qwxpd4epkt8lppt8w92fj9k0lu0jkc992ca" +
+        "rtk7p7h9rav7890asqdqlf3zykgrrdpskumn9dss8qcted4jkuaqxqrrssrzjqvd3g5uft3mrsxwtqm3tya0y0u3" +
+        "2xapw5lre05ft0fpn8lcfdqylugw4jsqqwlgqqqqqqqlgqqqqqqqp8ga93tlmcu5xdc6nxggel97jsq04frstrtl" +
+        "my4jngrxfyp7u5gayxsvpptt9qr8wp0yt8z8jzhdmqcwsvaqs3hwlzman7elgg5khssh6qqv9397v"
+
+        assertEquals(Bolt11.WithAmount(Bolt11Network.SIGNET, 10_000L), parseBolt11(minted))
+    }
+
     // --- App network vocabulary -> bolt11 network ---
 
     @Test
