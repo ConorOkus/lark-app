@@ -147,6 +147,33 @@ class BarkdApi(
         call(HttpMethod.Post, "/api/v1/wallet/addresses/next")
 
     /**
+     * Fork only ([BarkdCapabilities.hasChannels]): pays [request]'s invoice over one of the
+     * wallet's own LDK channels. A 2xx means accepted, NOT settled — the returned
+     * [LdkPaymentInfo.status] may still be non-terminal, so callers resolve the outcome
+     * through [ldkPayment] (plan R4).
+     */
+    suspend fun ldkPay(request: LdkPayRequest): BarkdResult<LdkPaymentInfo> =
+        call(HttpMethod.Post, "/api/v1/lightning/channels/ldk-pay") {
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
+
+    /** Fork only ([BarkdCapabilities.hasChannels]): the current state of one LDK payment. */
+    suspend fun ldkPayment(paymentHash: String): BarkdResult<LdkPaymentInfo> =
+        call(HttpMethod.Get, "/api/v1/lightning/channels/ldk-payment/$paymentHash")
+
+    /** Fork only ([BarkdCapabilities.hasChannels]): mints an invoice payable into a channel. */
+    suspend fun ldkInvoice(request: LdkInvoiceRequest): BarkdResult<LdkInvoiceInfo> =
+        call(HttpMethod.Post, "/api/v1/lightning/channels/ldk-invoice") {
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
+
+    /** Fork only ([BarkdCapabilities.hasChannels]): every LDK payment this wallet has seen. */
+    suspend fun ldkPayments(): BarkdResult<List<LdkPaymentEntry>> =
+        call(HttpMethod.Get, "/api/v1/lightning/channels/ldk-payments")
+
+    /**
      * The single request path: applies [auth], sends, and maps the outcome to [BarkdResult].
      * Cancellation is rethrown; anything else the engine throws means barkd was never
      * usefully reached, so it maps to [BarkdResult.Unreachable].

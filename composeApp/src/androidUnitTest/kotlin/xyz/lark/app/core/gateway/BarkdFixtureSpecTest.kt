@@ -49,6 +49,8 @@ class BarkdFixtureSpecTest {
                 "/api/v1/wallet/addresses/next",
                 "/api/v1/wallet/send",
                 "/api/v1/wallet/refresh/all",
+                "/api/v1/lightning/channels/ldk-pay",
+                "/api/v1/lightning/channels/ldk-invoice",
             ),
         )
     }

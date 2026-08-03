@@ -197,6 +197,51 @@ object BarkdFixtures {
         }
     """.trimIndent()
 
+    // An LDK payment that settled: `detail` is the preimage, which is why the app treats the
+    // field as a secret (plan R15) and never renders or logs it.
+    val FORK_LDK_PAYMENT = """
+        {
+          "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677",
+          "status": "sent",
+          "detail": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788ff"
+        }
+    """.trimIndent()
+
+    val FORK_LDK_INVOICE = """
+        {
+          "bolt11": "lntbs500u1pjq2xyzpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypq",
+          "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677"
+        }
+    """.trimIndent()
+
+    // Both directions, and a failed entry whose `detail` is a reason rather than a preimage.
+    val FORK_LDK_PAYMENTS = """
+        [
+          {
+            "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677",
+            "status": "sent",
+            "direction": "outbound",
+            "amount_msat": 5000000,
+            "detail": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788ff"
+          },
+          {
+            "payment_hash": "1122334455667788990011223344556677889900aabbccddeeff001122334455",
+            "status": "failed",
+            "direction": "inbound",
+            "amount_msat": 1000000,
+            "detail": "no route found"
+          }
+        ]
+    """.trimIndent()
+
+    /**
+     * What the deployed stack actually answers on every LDK route when barkd was built without
+     * a live LDK node (probed on lark-barkd.fly.dev, 2026-08-03). The app classifies this
+     * exact shape as "attempted nothing" and is allowed to fall back to Ark (plan U4).
+     */
+    const val FORK_LDK_NOT_INITIALIZED =
+        """{"message": "Failed to pay invoice: LDK node not initialized"}"""
+
     /** The wire discriminator values of [WalletNotification], validated against the spec. */
     val NOTIFICATION_TYPES = listOf("movement-created", "movement-updated", "channel-lagging")
 
@@ -253,6 +298,9 @@ object BarkdFixtures {
         "/api/v1/wallet/ark-info" to FORK_ARK_INFO,
         "/api/v1/wallet/addresses/next" to FORK_NEXT_ADDRESS,
         "/api/v1/lightning/channels" to FORK_CHANNELS,
+        "/api/v1/lightning/channels/ldk-pay" to FORK_LDK_PAYMENT,
+        "/api/v1/lightning/channels/ldk-invoice" to FORK_LDK_INVOICE,
+        "/api/v1/lightning/channels/ldk-payments" to FORK_LDK_PAYMENTS,
         "/api/v1/wallet/send" to SEND,
         "/api/v1/wallet/refresh/all" to PENDING_ROUND,
         "/api/v1/wallet/vtxos" to FORK_VTXOS,
