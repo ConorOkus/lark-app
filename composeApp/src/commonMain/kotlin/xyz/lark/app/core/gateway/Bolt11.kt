@@ -51,26 +51,40 @@ internal fun bolt11NetworkOf(expectedNetwork: String): Bolt11Network? =
 
 /** Reads what [destination]'s human-readable part says, or [Bolt11.Unrecognized]. */
 internal fun parseBolt11(destination: String): Bolt11 {
+    val hrp = humanReadablePart(destination)
+    val network = hrp?.let(::networkOf)
+    return if (hrp == null || network == null) {
+        Bolt11.Unrecognized
+    } else {
+        readAmount(network, hrp.substring(network.hrpPrefix.length))
+    }
+}
+
+/**
+ * The part before the bech32 separator, minus the `ln` scheme — or null when [destination] is
+ * not shaped like an invoice at all. The bech32 data charset excludes `1`, so the LAST `1` is
+ * always the separator, whatever the amount contains.
+ */
+private fun humanReadablePart(destination: String): String? {
     val text = destination.trim().lowercase()
-    if (!text.startsWith(INVOICE_SCHEME)) return Bolt11.Unrecognized
-
-    // The bech32 data charset excludes '1', so the last '1' is always the separator.
     val separator = text.lastIndexOf(BECH32_SEPARATOR)
-    if (separator <= INVOICE_SCHEME.length || separator == text.lastIndex) return Bolt11.Unrecognized
+    val wellFormed = text.startsWith(INVOICE_SCHEME) &&
+        separator > INVOICE_SCHEME.length &&
+        separator != text.lastIndex // an empty data part is not an invoice
+    return if (wellFormed) text.substring(INVOICE_SCHEME.length, separator) else null
+}
 
-    val afterScheme = text.substring(INVOICE_SCHEME.length, separator)
-    // Longest prefix first: `tb` prefixes `tbs` and `bc` prefixes `bcrt`, so a shortest match
-    // would read every signet invoice as testnet and treat a wrong-network send as payable.
-    val network = Bolt11Network.entries
-        .sortedByDescending { it.hrpPrefix.length }
-        .firstOrNull { afterScheme.startsWith(it.hrpPrefix) }
-        ?: return Bolt11.Unrecognized
+/**
+ * Longest prefix wins: `tb` prefixes `tbs` and `bc` prefixes `bcrt`, so a shortest match would
+ * read every signet invoice as testnet and treat a wrong-network send as payable.
+ */
+private fun networkOf(hrp: String): Bolt11Network? = Bolt11Network.entries
+    .sortedByDescending { it.hrpPrefix.length }
+    .firstOrNull { hrp.startsWith(it.hrpPrefix) }
 
-    val amountPart = afterScheme.substring(network.hrpPrefix.length)
-    if (amountPart.isEmpty()) return Bolt11.Amountless(network)
-
-    val amountSat = amountSatOf(amountPart) ?: return Bolt11.Unrecognized
-    return Bolt11.WithAmount(network, amountSat)
+private fun readAmount(network: Bolt11Network, amountPart: String): Bolt11 = when {
+    amountPart.isEmpty() -> Bolt11.Amountless(network)
+    else -> amountSatOf(amountPart)?.let { Bolt11.WithAmount(network, it) } ?: Bolt11.Unrecognized
 }
 
 /**
@@ -81,25 +95,21 @@ internal fun parseBolt11(destination: String): Bolt11 {
 private fun amountSatOf(amountPart: String): Long? {
     val hasMultiplier = !amountPart.last().isDigit()
     val digits = if (hasMultiplier) amountPart.dropLast(1) else amountPart
-    if (digits.isEmpty() || !digits.all { it.isDigit() }) return null
-
-    val amount = digits.toLongOrNull() ?: return null // 20+ digits overflow to null here
-    val milliSats = if (hasMultiplier) {
-        multipliedToMilliSats(amount, amountPart.last()) ?: return null
-    } else {
-        amount.timesOrNull(MSAT_PER_BTC) ?: return null
+    // toLongOrNull also absorbs 20+ digit amounts, which cannot fit a Long at all.
+    val amount = digits.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.toLongOrNull()
+    val milliSats = amount?.let {
+        if (hasMultiplier) multipliedToMilliSats(it, amountPart.last()) else it.timesOrNull(MSAT_PER_BTC)
     }
-
-    return if (milliSats % MSAT_PER_SAT == 0L) milliSats / MSAT_PER_SAT else null
+    return milliSats?.takeIf { it % MSAT_PER_SAT == 0L }?.div(MSAT_PER_SAT)
 }
 
 /** BOLT11's four multipliers, as millisats. `p` is finer than a millisat, so it divides. */
 private fun multipliedToMilliSats(amount: Long, multiplier: Char): Long? = when (multiplier) {
-    'm' -> amount.timesOrNull(MSAT_PER_BTC / 1_000L)
-    'u' -> amount.timesOrNull(MSAT_PER_BTC / 1_000_000L)
-    'n' -> amount.timesOrNull(MSAT_PER_BTC / 1_000_000_000L)
+    'm' -> amount.timesOrNull(MSAT_PER_MILLI_BTC)
+    'u' -> amount.timesOrNull(MSAT_PER_MICRO_BTC)
+    'n' -> amount.timesOrNull(MSAT_PER_NANO_BTC)
     // 10 pico-BTC is one millisat; anything finer is not expressible on the wire at all.
-    'p' -> if (amount % PICO_PER_MSAT == 0L) amount / PICO_PER_MSAT else null
+    'p' -> if (amount % PICO_BTC_PER_MSAT == 0L) amount / PICO_BTC_PER_MSAT else null
     else -> null
 }
 
@@ -110,5 +120,10 @@ private fun Long.timesOrNull(factor: Long): Long? =
 private const val INVOICE_SCHEME = "ln"
 private const val BECH32_SEPARATOR = '1'
 private const val MSAT_PER_SAT = 1_000L
+
+// One BTC is 100,000,000,000 msat; each multiplier is a decimal step down from it.
 private const val MSAT_PER_BTC = 100_000_000_000L
-private const val PICO_PER_MSAT = 10L
+private const val MSAT_PER_MILLI_BTC = 100_000_000L
+private const val MSAT_PER_MICRO_BTC = 100_000L
+private const val MSAT_PER_NANO_BTC = 100L
+private const val PICO_BTC_PER_MSAT = 10L

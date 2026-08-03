@@ -368,10 +368,12 @@ class GatewayLarkCore(
     private fun sendRouteFor(destination: String, sats: Long): SendRoute = resolveSendRoute(
         destination = destination,
         sats = sats,
-        channels = channelList,
-        capabilities = api.capabilities,
-        ldkAvailable = ldkAvailable,
-        expectedNetwork = expectedNetwork,
+        context = ChannelSendContext(
+            capabilities = api.capabilities,
+            ldkAvailable = ldkAvailable,
+            channels = channelList,
+            expectedNetwork = expectedNetwork,
+        ),
     )
 
     /** Today's path, unchanged: a 200 reads as success, and #32 owns closing that gap. */

@@ -36,10 +36,14 @@ class GatewayLarkCoreChannelSendTest {
         sticky(Paths.CHANNELS, BarkdScript.Json("[${channelJson("aa11bb22", localMsat = localMsat)}]"))
     }
 
+    /** The `ldk-pay` reply, then one queued settlement-poll reply per following status. */
     private fun BarkdScript.ldkPayReplies(vararg statuses: String) = apply {
         sticky(Paths.LDK_PAY, BarkdScript.Json(BarkdFixtures.forkLdkPayment(statuses.first())))
         statuses.drop(1).forEach { status ->
-            enqueue(Paths.ldkPayment(BarkdFixtures.LDK_PAYMENT_HASH), BarkdScript.Json(BarkdFixtures.forkLdkPayment(status)))
+            enqueue(
+                Paths.ldkPayment(BarkdFixtures.LDK_PAYMENT_HASH),
+                BarkdScript.Json(BarkdFixtures.forkLdkPayment(status)),
+            )
         }
     }
 

@@ -274,9 +274,19 @@ class AppStateMachine(
         workJob?.cancel()
         workJob = scope.launch {
             val result = core.send(state.confirmedRecipient, state.confirmedSats)
-            val landing = if (result is SendResult.Success) Route.SENT else Route.FAILED
-            landIfStillSending(landing)
+            landIfStillSending(landingFor(result))
         }
+    }
+
+    /**
+     * Where a send outcome lands. Matched exhaustively over the sealed [SendResult] on purpose:
+     * a future outcome must fail the build rather than fall silently into one of these screens,
+     * which is how [SendResult.Pending] would otherwise have landed on "Didn't go through."
+     */
+    private fun landingFor(result: SendResult): Route = when (result) {
+        SendResult.Success -> Route.SENT
+        SendResult.Pending -> Route.PENDING
+        SendResult.Failure -> Route.FAILED
     }
 
     /** Lands [route] only if the user is still on the working screen — a stale job must not steal the route. */

@@ -66,31 +66,36 @@ internal fun inboundLiquiditySat(channels: List<LightningChannelInfo>): Long =
         .sumOf { (it.capacitySat - it.localBalanceMsat / MSAT_PER_SAT).coerceAtLeast(0L) }
 
 /**
+ * What the wallet can currently do about channel sends: the surface's capabilities, whether the
+ * daemon actually has a live LDK node, the raw wire channels, and the network the wallet is on.
+ *
+ * Grouped as one value because these four always travel together and are meaningless apart —
+ * and because the [channels] here are deliberately the raw wire shapes, not the display
+ * snapshot: display models round and format for presentation and must never gate money.
+ */
+internal data class ChannelSendContext(
+    val capabilities: BarkdCapabilities,
+    val ldkAvailable: Boolean,
+    val channels: List<LightningChannelInfo>,
+    val expectedNetwork: String,
+)
+
+/**
  * Decides whether [destination] for [sats] leaves over a channel or over Ark, in the order the
  * plan's routing flowchart defines. Pure by design: this is the branch that decides where money
  * goes, so it is tested in isolation rather than inferred from a core's behavior.
- *
- * It reads the raw wire [channels] rather than the display snapshot on purpose — display models
- * round and format for presentation and must never gate money.
  *
  * The amount check is the subtle one. `ldk-pay` accepts an invoice and no amount, so the
  * invoice's own figure is what gets paid; if that disagrees with the [sats] the app is sending
  * (and showed on the review screen), the channel path is refused rather than paying a different
  * number than the user approved.
  */
-@Suppress("ReturnCount") // one early return per precondition is the clearest shape for this gate
-internal fun resolveSendRoute(
-    destination: String,
-    sats: Long,
-    channels: List<LightningChannelInfo>,
-    capabilities: BarkdCapabilities,
-    ldkAvailable: Boolean,
-    expectedNetwork: String,
-): SendRoute {
-    if (!capabilities.hasChannels) return arkRoute(ArkRouteReason.STOCK_SURFACE)
-    if (!ldkAvailable) return arkRoute(ArkRouteReason.LDK_UNAVAILABLE)
+@Suppress("ReturnCount") // one early return per precondition: the gate reads as its flowchart
+internal fun resolveSendRoute(destination: String, sats: Long, context: ChannelSendContext): SendRoute {
+    if (!context.capabilities.hasChannels) return arkRoute(ArkRouteReason.STOCK_SURFACE)
+    if (!context.ldkAvailable) return arkRoute(ArkRouteReason.LDK_UNAVAILABLE)
 
-    val walletNetwork = bolt11NetworkOf(expectedNetwork)
+    val walletNetwork = bolt11NetworkOf(context.expectedNetwork)
         ?: return arkRoute(ArkRouteReason.WALLET_NETWORK_UNKNOWN)
 
     val invoice = parseBolt11(destination)
@@ -103,6 +108,7 @@ internal fun resolveSendRoute(
     if (invoice !is Bolt11.WithAmount) return arkRoute(ArkRouteReason.AMOUNTLESS_INVOICE)
     if (invoice.amountSat != sats) return arkRoute(ArkRouteReason.AMOUNT_MISMATCH)
 
+    val channels = context.channels
     if (channels.none { it.isUsable }) return arkRoute(ArkRouteReason.NO_USABLE_CHANNEL)
     if (outboundLiquiditySat(channels) < sats) return arkRoute(ArkRouteReason.INSUFFICIENT_OUTBOUND)
 

@@ -23,6 +23,8 @@ enum class Route(val screenLabel: String) {
     REVIEW("Pay — review"),
     SENDING("Working"),
     SENT("Sent"),
+    /** Accepted but not yet settled: the honest landing for [xyz.lark.app.core.model.SendResult.Pending]. */
+    PENDING("On its way"),
     FAILED("Failed"),
     RECEIVE("Get paid"),
     SETTINGS("Settings"),

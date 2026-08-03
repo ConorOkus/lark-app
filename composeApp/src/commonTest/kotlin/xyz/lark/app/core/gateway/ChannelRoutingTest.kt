@@ -34,6 +34,7 @@ class ChannelRoutingTest {
     private val forkCapabilities = BarkdCapabilities.of(BarkdApiVariant.FORK_BETA6)
     private val stockCapabilities = BarkdCapabilities.of(BarkdApiVariant.STOCK_0_4)
 
+    @Suppress("LongParameterList") // test builder: each parameter is one independent routing knob
     private fun route(
         destination: String = signetInvoice(),
         sats: Long = 50_000L,
@@ -41,7 +42,11 @@ class ChannelRoutingTest {
         capabilities: BarkdCapabilities = forkCapabilities,
         ldkAvailable: Boolean = true,
         expectedNetwork: String = signet,
-    ) = resolveSendRoute(destination, sats, channels, capabilities, ldkAvailable, expectedNetwork)
+    ) = resolveSendRoute(
+        destination = destination,
+        sats = sats,
+        context = ChannelSendContext(capabilities, ldkAvailable, channels, expectedNetwork),
+    )
 
     private fun assertArk(expected: ArkRouteReason, actual: SendRoute) =
         assertEquals(SendRoute.OverArk(expected), actual)

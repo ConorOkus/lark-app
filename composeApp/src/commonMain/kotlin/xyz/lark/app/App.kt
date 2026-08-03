@@ -30,6 +30,7 @@ import xyz.lark.app.ui.screens.pay.ReviewScreen
 import xyz.lark.app.ui.screens.pay.ScanScreen
 import xyz.lark.app.ui.screens.pay.SendInputScreen
 import xyz.lark.app.ui.screens.pay.SendingScreen
+import xyz.lark.app.ui.screens.pay.PendingScreen
 import xyz.lark.app.ui.screens.pay.SentScreen
 import xyz.lark.app.ui.screens.receive.ReceiveScreen
 import xyz.lark.app.ui.screens.settings.AdvancedScreen
@@ -123,6 +124,7 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
                 recipientName = model.send.recipientName,
                 onDone = { machine.go(Route.HOME) },
             )
+            Route.PENDING -> PendingRoute(model = model, machine = machine)
             Route.FAILED -> FailedScreen(onTryAgain = machine::tryAgain, onCancel = { machine.go(Route.HOME) })
             Route.RECEIVE -> ReceiveRoute(model = model, machine = machine)
             Route.SETTINGS -> SettingsScreen(model = model, machine = machine)
@@ -133,6 +135,14 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
         }
     }
 }
+
+/** The PENDING branch: an accepted-but-unsettled send, shown from the confirmed snapshot. */
+@Composable
+private fun PendingRoute(model: AppModel, machine: AppStateMachine) = PendingScreen(
+    amount = model.sentAmount,
+    recipientName = model.send.recipientName,
+    onDone = { machine.go(Route.HOME) },
+)
 
 /** The RECEIVE branch: binds [ReceiveScreen]'s callbacks to the machine's intents. */
 @Composable
