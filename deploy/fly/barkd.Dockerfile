@@ -31,7 +31,15 @@ WORKDIR /src/bark
 # Debug build, matching the local runbook (target/debug/barkd) and the captaind
 # image: the app is pinned to this fork's exact REST shape (BarkdApiVariant.FORK_BETA6),
 # so "same binary as the one the contract was measured against" matters more than speed.
-RUN cargo build --bin barkd
+#
+# `--features lightning` is NOT optional. bark-cli gates the entire
+# /api/v1/lightning/channels/* surface behind it (features.lightning =
+# bark-wallet/lightning + bark-rest/lightning), and the app pins FORK_BETA6, whose
+# BarkdCapabilities set hasChannels = true — so GatewayLarkCore polls that route every
+# cycle. Built without the flag the routes are simply absent and every poll 404s, which
+# the app reports as a channel-less bridge rather than as an error. Same invocation the
+# local runbook documents (docs/gateway/local-mutinynet.md).
+RUN cargo build -p bark-cli --features lightning --bin barkd
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

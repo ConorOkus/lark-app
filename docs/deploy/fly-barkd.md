@@ -59,10 +59,24 @@ tar cf - -C "$LOCAL_DATADIR" . \
 fly secrets unset MAINTENANCE -a lark-barkd
 
 # 5. Verify it is the *same* wallet, not a new one: the balance and the
-#    server_pubkey must match what the local daemon reported.
+#    per-VTXO server_pubkey must match what the local daemon reported.
 curl -s https://lark-barkd.fly.dev/api/v1/wallet/balance
 curl -s https://lark-barkd.fly.dev/api/v1/wallet/vtxos
 curl -s https://lark-barkd.fly.dev/api/v1/bitcoin/tip
+
+# 6. Verify the image actually carries the channel surface the app is pinned to.
+#    Built without `--features lightning` these routes are simply ABSENT, and the
+#    app degrades quietly (FORK_BETA6 sets hasChannels = true, so GatewayLarkCore
+#    polls them every cycle and reads a 404 as "no bridge") — which is exactly why
+#    the wallet-state checks above cannot catch it.
+#
+#    The assertion is "the route EXISTS", not "it succeeds": 404 means the binary
+#    was built without the feature and must be rebuilt. 500 with
+#    {"message":"Failed to list lightning channels: LDK node not initialized"} is
+#    the CORRECT response for this datadir — the wallet config has lightning
+#    disabled, so LDK never starts, and the local daemon answers identically.
+curl -s -w '\nchannels: %{http_code} (404 = rebuild with --features lightning)\n' \
+  https://lark-barkd.fly.dev/api/v1/lightning/channels
 ```
 
 ## Pointing the app at it
