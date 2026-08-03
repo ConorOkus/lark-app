@@ -101,3 +101,63 @@ never relax the CoreConfig https rule for `10.0.2.2` or LAN hosts.
 5. Settings footer reads `… · mutinynet`; Advanced shows the Lightning bridge
    row with the channel count/balance and one row per channel (state + expiry).
 6. Activity lists the wallet's movements (`/wallet/history` on this surface).
+
+## Channel-payment smoke (send and receive over a channel)
+
+**Precondition — check this first, or the rest of the stage is meaningless.**
+`GET /api/v1/lightning/channels` on the barkd the app targets must answer with a
+channel, not a 500:
+
+```bash
+curl -s http://localhost:3001/api/v1/lightning/channels
+```
+
+If it answers `500 {"message": "… LDK node not initialized"}`, this barkd has no
+LDK node and **there is nothing to smoke** — the app will correctly route every
+payment over Ark and show an em-dash Lightning bridge. That is the designed
+behavior, not a regression. See the trap below.
+
+1. **Send over a channel.** The app has no destination text entry yet (#14), so
+   point `PASTED_HANDLE` in `AppStateMachine` at a real BOLT11 invoice and
+   rebuild — the same technique #14 documents. The invoice must be:
+   - on this wallet's network (a signet/mutinynet `lntbs…` prefix),
+   - **amount-bearing**, and
+   - for an amount within the channel's outbound liquidity
+     (`local_balance_msat / 1000` summed over usable channels).
+
+   Enter that same amount on the keypad. Any mismatch between the keypad amount
+   and the invoice amount deliberately routes over Ark instead — that is the
+   guard against paying a figure the review screen never showed, not a bug.
+
+   Expect: the app lands on **Sent.** only after the payment reached a terminal
+   LDK state. A payment that never settles within the budget lands on **On its
+   way** instead — record which you saw.
+
+2. **Receive over a channel.** Get paid → Set amount → enter an amount, and read
+   the code box. Two outcomes, both correct:
+   - `bitcoin:?ark=…&lightning=lntbs…` — inbound liquidity covered the amount.
+   - `bitcoin:?ark=…` only — it did not, so no invoice was minted.
+
+   **Record which branch you observed.** On a channel this wallet funded itself,
+   inbound liquidity is zero (inbound is the counterparty's side), so ark-only is
+   the expected answer until value has moved out of the channel. Verify with:
+
+   ```bash
+   curl -s http://localhost:3001/api/v1/lightning/channels \
+     | python3 -c 'import json,sys; cs=json.load(sys.stdin); print(sum(c["capacity_sat"]-c["local_balance_msat"]//1000 for c in cs if c["is_usable"]), "sat inbound")'
+   ```
+
+### Trap: `supports_channels: true` on a barkd with no LDK node
+
+The hosted Fly stack (`lark-barkd.fly.dev`) reports `supports_channels: true`
+from `ark-info` while every `/api/v1/lightning/*` route answers
+`500 "LDK node not initialized"` (probed 2026-08-03). ark-info describes the
+*Ark server's* capability; it says nothing about whether this barkd has an LDK
+node of its own.
+
+So the capability flag cannot be trusted as proof, and the app does not trust
+it: it treats LDK availability as a runtime fact, falls back to Ark for every
+payment, keeps the Lightning bridge row at an em-dash, and after the first
+not-initialized answer drops to a slow re-probe instead of failing a request
+every poll cycle. If channel behavior appears to do nothing on a given stack,
+check this before assuming an app bug.
