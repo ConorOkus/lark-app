@@ -27,6 +27,13 @@ import kotlin.test.fail
  */
 class BarkdFixtureSpecTest {
 
+    private companion object {
+        const val LDK_PAYMENT_PATH = "/api/v1/lightning/channels/ldk-payment/{hash}"
+
+        /** Every status the settlement mapping reads; `sent`/`claimed` terminal, `failed` fatal. */
+        val LDK_STATUSES = listOf("pending", "claimable", "sent", "claimed", "failed")
+    }
+
     private val stockSpec by lazy {
         SpecValidator(
             specFile = locateSpec("barkd-openapi-0.4.0.json"),
@@ -80,6 +87,64 @@ class BarkdFixtureSpecTest {
         }
     }
 
+    /**
+     * `ldk-payment/{hash}` is hash-scoped, so it has no [BarkdFixtures.forkByPath] entry — but
+     * the settlement loop reads it every poll, so its shape is pinned against the templated
+     * spec path directly.
+     */
+    @Test
+    fun theSettlementPollFixtureMatchesItsForkEndpointResponseSchema() {
+        forkSpec.validateFixture(LDK_PAYMENT_PATH, BarkdFixtures.FORK_LDK_PAYMENT)
+        LDK_STATUSES.forEach { status ->
+            forkSpec.validateFixture(LDK_PAYMENT_PATH, BarkdFixtures.forkLdkPayment(status))
+        }
+    }
+
+    /**
+     * The send path keys its double-pay guard on this exact body, so drift in the error shape is
+     * a correctness problem, not cosmetics: pin it against the fork's own 500 schema.
+     */
+    @Test
+    fun theLdkNotInitializedBodyMatchesTheForkErrorSchema() {
+        forkSpec.validateErrorFixture(
+            "/api/v1/lightning/channels/ldk-pay",
+            "500",
+            BarkdFixtures.FORK_LDK_NOT_INITIALIZED,
+        )
+    }
+
+    /**
+     * Every status the settlement mapping branches on must be one the fork documents. The fork
+     * types `status` as a bare string and documents the values in its description rather than as
+     * an enum, so this reads that description out of the schema instead of grepping the file —
+     * which would match the same words anywhere in the document.
+     */
+    @Test
+    fun everyLdkStatusTheAppBranchesOnIsDocumentedByTheForkSpec() {
+        val documented = forkSpec.propertyDescription("LdkPaymentInfo", "status")
+        LDK_STATUSES.forEach { status ->
+            assertTrue(
+                status in documented,
+                "LDK status \"$status\" is not documented by the fork's LdkPaymentInfo.status: $documented",
+            )
+        }
+    }
+
+    /** Every LDK route the app calls is covered by a spec-validated fixture. */
+    @Test
+    fun everyLdkRouteTheAppCallsHasASpecValidatedFixture() {
+        val covered = BarkdFixtures.forkByPath.keys + LDK_PAYMENT_PATH
+        listOf(
+            "/api/v1/lightning/channels",
+            "/api/v1/lightning/channels/ldk-pay",
+            "/api/v1/lightning/channels/ldk-invoice",
+            "/api/v1/lightning/channels/ldk-payments",
+            LDK_PAYMENT_PATH,
+        ).forEach { path ->
+            assertTrue(path in covered, "no spec-validated fixture covers $path")
+        }
+    }
+
     /** The reason this validator is endpoint-scoped: a key that is real elsewhere still fails here. */
     @Test
     fun aKeyMovedToTheWrongEndpointFailsValidation() {
@@ -118,17 +183,40 @@ class BarkdFixtureSpecTest {
 
         /** Validates [fixture] against the success response schema of [path] in this spec. */
         fun validateFixture(path: String, fixture: String) {
-            validate(Json.parseToJsonElement(fixture), successResponseSchema(path), "fixture for $path")
+            validate(Json.parseToJsonElement(fixture), responseSchema(path, "200"), "fixture for $path")
         }
+
+        /**
+         * Validates [fixture] against the [status] response schema of [path] — error bodies the
+         * app reads decisions from must be pinned too, not just the happy paths.
+         */
+        fun validateErrorFixture(path: String, status: String, fixture: String) {
+            validate(
+                Json.parseToJsonElement(fixture),
+                responseSchema(path, status),
+                "$status fixture for $path",
+            )
+        }
+
+        /**
+         * The `description` of one property of a component schema. Some fork fields document
+         * their allowed values in prose instead of an `enum`, and those values are still a
+         * contract the app branches on.
+         */
+        fun propertyDescription(schemaName: String, property: String): String =
+            componentSchemas.getValue(schemaName).jsonObject
+                .getValue("properties").jsonObject
+                .getValue(property).jsonObject
+                .getValue("description").jsonPrimitive.content
 
         // --- Endpoint -> response schema ---
 
-        private fun successResponseSchema(path: String): JsonObject {
+        private fun responseSchema(path: String, status: String): JsonObject {
             val method = if (path in postPaths) "post" else "get"
             val operation = spec.getValue("paths").jsonObject.getValue(path).jsonObject.getValue(method)
             return operation.jsonObject
                 .getValue("responses").jsonObject
-                .getValue("200").jsonObject
+                .getValue(status).jsonObject
                 .getValue("content").jsonObject
                 .getValue("application/json").jsonObject
                 .getValue("schema").jsonObject
