@@ -66,6 +66,17 @@ kotlin {
             // FFI unit-test lane would fail to initialise JNA without this. Both, not either.
             implementation(libs.jna)
         }
+        // The on-device lane. It exists because the JVM host cannot answer one question the
+        // adapter depends on: whether the crate's async calls complete off the main thread.
+        // See docs/ffi/kotlin-bindings-status.md — on the host they complete only under
+        // runBlocking on the JUnit thread, which is not a shape FfiLarkCore can use.
+        androidInstrumentedTest.dependencies {
+            implementation(libs.kotlin.test)
+            implementation(libs.junit)
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.test.ext.junit)
+            implementation(libs.kotlinx.coroutines.core)
+        }
     }
 }
 
@@ -79,6 +90,7 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     packaging {
         resources {
