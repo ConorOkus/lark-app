@@ -51,6 +51,13 @@ ln_receive_anti_dos_required = false
 [ldk]
 enabled = true
 listen_address = "0.0.0.0:9735"
+# Bind and advertise are different addresses here, and conflating them is why every
+# client failed with "TCP connection to <pubkey> at 0.0.0.0:9735 failed": clients dial
+# what get_ln_node_info returns verbatim, and a wildcard bind is not reachable from
+# outside the VM. Binding the public address instead is not possible — Fly forwards the
+# dedicated IPv4 to a private address the interface does not hold, so the bind fails.
+# Rendered from LDK_ANNOUNCE_ADDRESS; the entrypoint drops this line when unset.
+announce_address = "__LDK_ANNOUNCE_ADDRESS__"
 
 [vtxo_sweeper]
 enabled = true
