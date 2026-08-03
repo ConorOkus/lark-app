@@ -1,0 +1,32 @@
+app = "lark-barkd"
+primary_region = "iad"
+# Deploy from repo root with: fly deploy . -c deploy/fly/fly.barkd.toml \
+#   --dockerfile deploy/fly/barkd.Dockerfile   (COPY paths need repo-root context)
+
+[env]
+  DATA_DIR = "/data/bark"
+  BARKD_PORT = "3011"
+
+[[mounts]]
+  source = "bark_data"
+  destination = "/data/bark"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024"
+
+# Unlike captaind, barkd speaks plain HTTP/1.1 REST rather than gRPC, so Fly's
+# proxy CAN terminate TLS for it: no h2 ALPN to negotiate, no h2c backend, none
+# of what forced captaind onto a raw dedicated-IPv4 port. That means a free
+# shared IPv4 and a real publicly-trusted cert on lark-barkd.fly.dev.
+#
+# SECURITY: TLS here buys confidentiality and integrity, NOT access control.
+# barkd has no auth whatsoever, so this URL is a spendable wallet open to anyone
+# who has it. Accepted deliberately for a mutinynet tester; see the header of
+# barkd.Dockerfile and docs/deploy/fly-barkd.md.
+[http_service]
+  internal_port = 3011
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
