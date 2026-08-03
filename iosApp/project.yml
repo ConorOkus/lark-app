@@ -47,3 +47,36 @@ targets:
           fi
           cd "$SRCROOT/.."
           ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
+
+  # The iOS half of the FFI threading experiment (see the test's own docs and
+  # docs/ffi/kotlin-bindings-status.md). Deliberately independent of the iosApp target: it links
+  # only the Rust static library and the generated Swift glue, so nothing about the Compose
+  # framework or the Kotlin build can influence the result.
+  #
+  # Simulator-only by construction — LIBRARY_SEARCH_PATHS names the ios-sim target dir. Rebuild
+  # that library with:
+  #   cd rust/lark-ffi && cargo build --target aarch64-apple-ios-sim
+  # and regenerate the glue with uniffi-bindgen --language swift (see scripts/build-xcframework.sh).
+  FfiThreadingTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FfiThreadingTests/FfiAsyncThreadingTests.swift
+      - path: FfiThreadingTests/Generated/lark_ffi.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: xyz.lark.app.ffithreadingtests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_INCLUDE_PATHS: "$(inherited) $(SRCROOT)/FfiThreadingTests/Generated/include"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../rust/lark-ffi/target/aarch64-apple-ios-sim/debug"
+        OTHER_LDFLAGS: "$(inherited) -llark_ffi"
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+
+schemes:
+  FfiThreadingTests:
+    build:
+      targets:
+        FfiThreadingTests: [test]
+    test:
+      targets:
+        - FfiThreadingTests

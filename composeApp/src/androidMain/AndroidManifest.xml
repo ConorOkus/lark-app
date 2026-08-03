@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Every core the app can compose reaches the network: the gateway core over HTTP, and the
+         in-process Rust core's own chain source and Ark server. Without this the sockets fail at
+         the kernel, not with an app-level error. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="@string/app_name"
         android:supportsRtl="true"

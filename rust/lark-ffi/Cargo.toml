@@ -23,7 +23,10 @@ bitcoin = { version = "0.32", features = ["serde", "rand", "rand-std"] }
 bip39 = { version = "2.0.0", features = ["rand", "zeroize"] }
 
 uniffi = { version = "0.28", features = ["tokio", "cli"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+# "time" is for the async_probe_tokio_timer diagnostic (see lib.rs): it parks a
+# future on the tokio timer, which is the cheapest way to make the reactor wake
+# the foreign continuation from a thread the caller never entered.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net"] }
 thiserror = "1"
 anyhow = "1"
 

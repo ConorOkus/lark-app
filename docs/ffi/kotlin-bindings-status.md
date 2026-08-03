@@ -73,21 +73,122 @@ completing after its HTTP response is delivered; the Kotlin side is waiting corr
 at how UniFFI 0.28's `async_runtime = "tokio"` integration drives the reactor for this crate, which
 is crate-side work (parent plan U1), not something the Kotlin adapter can fix.
 
-Note this may well be **specific to the JVM unit-test host**. The launch-into-a-scope pattern is
-what UniFFI apps normally do on Android, and this repo cannot currently build for a device (no
-Android NDK / `cargo-ndk` available here — see the plan's Scope Boundaries), so on-device behavior
-is untested rather than known-bad.
+### Measured on-device 2026-08-02: not a host artifact — it reproduces
+
+The open question above ("may well be specific to the JVM unit-test host") is now **closed, and the
+answer is no**. `FfiAsyncThreadingInstrumentedTest` runs the same three shapes on a real Android
+runtime (emulator, android-35, arm64-v8a, API 26 build of the crate) against `DeviceStubEsplora`:
+
+| Call shape, on device | Result |
+| --- | --- |
+| `runBlocking { openWallet(…) }` on the instrumentation thread | **completes** |
+| `scope.launch { openWallet(…) }` on `Dispatchers.IO` | hangs — failed the 90s deadline |
+| `executor.execute { runBlocking { openWallet(…) } }` | hangs — failed the 90s deadline |
+
+Identical to the host, including the signature: in both hanging cases the stub logged
+`/block-height/0`, so the chain-source request went out **and was answered**, and the call still
+never returned. The only variable between the passing and failing shapes is which thread entered
+the call — both failing shapes use the same `runBlocking`/dispatcher machinery that works on the
+instrumentation thread.
+
+This rules out the JVM host, Robolectric, desktop JNA natives, and the JDK's `HttpServer` stub as
+causes.
+
+The NDK note in the original text is also stale: NDK 28.1 and an arm64 system image were already
+installed (under the Homebrew `android-commandlinetools` root, not `~/Library/Android/sdk`); only
+`cargo-ndk` had to be added.
+
+### Measured on iOS 2026-08-02: the same crate completes — so this is a *bindings* bug
+
+The natural reading of the Android result is "crate-side". **It is not.** `iosApp/FfiThreadingTests`
+runs the same experiment through the other foreign binding — Swift, no JVM, no JNA, no Kotlin
+continuation shim — against the same crate revision, on the iOS 26 simulator:
+
+| Call shape, iOS simulator | Result |
+| --- | --- |
+| `Task { try await openWallet(…) }` | **completes** (75.3s) |
+| `Task.detached { try await openWallet(…) }` | **completes** (75.7s) |
+
+`Task.detached` is the closest Swift analogue of the Kotlin shape that hangs: no inherited context,
+driven by a thread unrelated to the caller. More decisive still, Swift has **no** equivalent of
+`runBlocking` — nothing in either shape lets the calling thread drive the future, and both complete
+anyway.
+
+So the Rust future *is* driven to completion after its HTTP response, and the foreign continuation
+callback *is* invoked — when the foreign side is Swift. The fault is therefore in the **UniFFI 0.28
+Kotlin/JNA async path**, not in the crate's `async_runtime = "tokio"` usage. The `src/lib.rs`
+comment ("UniFFI's tokio integration owns the runtime, so the crate does not build one") is not the
+culprit it looked like.
+
+Note the two lanes differ in chain source — Android used `DeviceStubEsplora`, iOS the real
+mutinynet esplora — but that is not the discriminator: the Android control passes against the stub,
+so the stub can serve a complete wallet creation. The 75s per iOS test is the real esplora, not a
+symptom.
+
+**What this changes:** the iOS half of the seam (parent plan U3) is unblocked — the Swift binding
+drives the crate correctly from a detached task, which is the shape an iOS adapter needs. The
+Kotlin adapter stays blocked, but on a much smaller and better-located problem.
+
+### Probed 2026-08-02: the Kotlin async machinery is NOT broken — it works off-thread
+
+"The fault is in the UniFFI Kotlin/JNA async path" was the right neighbourhood but too broad, and
+it would have sent the fix to the wrong place. `FfiAsyncProbeInstrumentedTest` drives three
+minimal async exports (`lib.rs`: `async_probe_no_runtime`, `async_probe_tokio_timer`,
+`async_probe_tokio_tcp`) from `scope.launch` on `Dispatchers.IO`, on the same emulator and the
+same `.so` where `openWallet` hangs:
+
+| Probe | What it exercises | `runBlocking` | `scope.launch` |
+| --- | --- | --- | --- |
+| no runtime (`Ready` on first poll) | the poll/continuation round-trip alone | passes | **passes** |
+| tokio timer (`sleep`) | a wake from a Rust-owned reactor thread | passes | **passes** |
+| tokio TCP (`TcpStream::connect`) | the tokio **I/O driver** wake path | passes | **passes** |
+
+All six green. So off the instrumentation thread, on Android: the foreign continuation callback
+*is* delivered, JNA *does* dispatch it from a Rust-owned thread, and both the timer and the I/O
+driver *do* wake it. Every generic mechanism the hang was blamed on is exonerated.
+
+The three probes were chosen to bracket the plumbing while sharing nothing with the wallet: no
+sockets to the internet, no TLS, no sqlite, no bark. What remains is therefore specific to what
+`openWallet` itself does — bark's `Wallet::create`/open path — not to UniFFI, JNA, or tokio.
+
+That also re-reads the original evidence. The stub logging `/block-height/0` and then nothing was
+taken as "the response came back and the future never woke". Given the probes, the more likely
+reading is that the future woke fine and then blocked *inside bark* on something that only
+completes when the caller is the instrumentation thread — a nested `block_on`, a blocking sqlite
+or CPU section on the poll thread, or a lock held across an await.
+
+**Next probe:** an export that does one piece of what `openWallet` does and nothing else — the bdk
+genesis fetch, or opening the sqlite database — called from `scope.launch`. That splits bark's
+chain access from its storage. The probes and their harness are already in place, so each new one
+is a few lines plus a rebuild.
 
 ## What to do next
 
-1. **Reproduce on a device or emulator.** Build the `.so` via `BUILD_ANDROID=1 scripts/build-rust.sh`
-   with an NDK present and drive `openWallet` from a launched coroutine. If it completes there, the
-   blocker is a JVM-host artifact and the contract lane needs a different shape (or the adapter is
-   verified on-device and the JVM lane stays at the characterization level landed here).
-2. **If it reproduces off the main thread everywhere**, investigate crate-side: how the UniFFI tokio
-   integration is configured, whether the runtime is multi-threaded, and whether the future is
-   spawned onto it rather than merely polled inside `enter()`.
-3. **A draft `FfiLarkCore` + its contract lane exist** and compile against these bindings. They were
+1. ~~**Reproduce on a device or emulator.**~~ **Done 2026-08-02 — it reproduces.** See the on-device
+   table above. Re-run with `./gradlew :composeApp:connectedDebugAndroidTest` after building the
+   native library for the device:
+   ```sh
+   export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709
+   cd rust/lark-ffi && cargo ndk -t arm64-v8a --platform 26 \
+     -o ../../composeApp/src/androidMain/jniLibs build
+   # then strip: the debug .so is ~410MB unstripped, ~32MB after llvm-strip --strip-unneeded
+   ```
+2. ~~**Investigate crate-side.**~~ **Ruled out 2026-08-02 by the iOS run above** — the same crate
+   completes from a detached Swift task. Investigate the **Kotlin async binding** instead:
+   `uniffiRustCallAsync` in the generated `lark_ffi.kt`, the `UniffiRustFutureContinuationCallback`
+   it installs, and whether that JNA callback is invoked when the waker fires on a Rust-owned
+   thread. The measured "zero exceptions from `Native.setCallbackExceptionHandler`" says it is
+   never invoked at all, which is consistent with a callback the JVM cannot dispatch to — e.g. an
+   unattached native thread, or a callback object that has to stay strongly referenced.
+   Reproduce with:
+   ```sh
+   ./gradlew :composeApp:connectedDebugAndroidTest   # Android: two shapes hang
+   cd iosApp && xcodegen generate && xcodebuild test -project iosApp.xcodeproj \
+     -scheme FfiThreadingTests -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+   ```
+3. **The iOS adapter is no longer blocked.** U3 can proceed on the Swift binding as designed; only
+   the Kotlin/Android adapter waits on step 2.
+4. **A draft `FfiLarkCore` + its contract lane exist** and compile against these bindings. They were
    deliberately not committed: with the async bridge unverified, committing a wallet core whose
    contract suite fails 9/9 would claim a working core that does not work. The draft is worth
    recovering once step 1 or 2 resolves — the adapter's decisions (poll loop, honest absences,
