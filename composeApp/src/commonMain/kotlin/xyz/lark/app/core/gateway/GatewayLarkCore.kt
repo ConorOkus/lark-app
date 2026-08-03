@@ -77,8 +77,16 @@ private const val DEFAULT_SETTLEMENT_POLL_DELAY_SECONDS = 1
 /** ~2.5 minutes at the default cadence: slow enough to stop hammering, quick enough to notice. */
 private const val DEFAULT_LDK_REPROBE_CYCLES = 10
 
+/**
+ * Lifetime requested for a minted channel invoice, and therefore how long one may be reused. Sent
+ * explicitly rather than relying on the fork's own 3600s default, so the app knows the window it
+ * is caching against instead of guessing it.
+ */
+private const val CHANNEL_INVOICE_EXPIRY_SECONDS = 3600
+
 private val DEFAULT_POLL_INTERVAL = DEFAULT_POLL_INTERVAL_SECONDS.seconds
 private val DEFAULT_SETTLEMENT_POLL_DELAY = DEFAULT_SETTLEMENT_POLL_DELAY_SECONDS.seconds
+private val CHANNEL_INVOICE_EXPIRY = CHANNEL_INVOICE_EXPIRY_SECONDS.seconds
 private val DEFAULT_OFFLINE_BACKOFF = List(BACKOFF_STEPS) { BACKOFF_START_SECONDS.seconds * (1 shl it) }
 private val DEFAULT_LONG_POLL_RETRY = DEFAULT_LONG_POLL_RETRY_SECONDS.seconds
 
@@ -209,6 +217,9 @@ class GatewayLarkCore(
      */
     private var ldkAvailable = true
     private var ldkReprobeSkips = 0
+
+    /** The last channel invoice minted for a requested amount; aged out at its own expiry. */
+    private var channelInvoice: ChannelInvoice? = null
     private var activityRows: List<Transaction> = emptyList()
     private var recentRows: List<Contact> = emptyList()
     private var mnemonicWords: List<String> = emptyList()
@@ -339,6 +350,56 @@ class GatewayLarkCore(
             }
         }
     }
+
+    // --- Receive (R7/R8/R9) ---
+
+    /**
+     * The amount-specific receive code: today's ark-only URI, plus a channel invoice when one can
+     * actually be paid.
+     *
+     * Every guard degrades to the ark-only code rather than failing, because a Get-paid screen
+     * with no code is worse than one that offers fewer destinations. The inbound-liquidity guard
+     * is the one that matters live: a channel the wallet funded itself holds no inbound capacity
+     * at all, so this normally returns the plain ark code — and never an invoice nobody could pay.
+     */
+    override suspend fun requestReceiveCode(sats: Long): String {
+        val arkUri = receiveCodeCache.orEmpty()
+        val invoice = if (arkUri.isEmpty() || sats <= 0) null else channelInvoiceFor(sats)
+        return if (invoice == null) arkUri else withLightningInvoice(arkUri, invoice)
+    }
+
+    private suspend fun channelInvoiceFor(sats: Long): String? {
+        val mintable = api.capabilities.hasChannels &&
+            ldkAvailable &&
+            inboundLiquiditySat(channelList) >= sats
+        return if (!mintable) null else cachedChannelInvoice(sats) ?: mintChannelInvoice(sats)
+    }
+
+    /**
+     * Reuses the last invoice for the same amount so revisiting Get paid does not mint a fresh
+     * one each time — but only inside the expiry it was minted with, so an expired invoice is
+     * never served as though it were still payable.
+     */
+    private fun cachedChannelInvoice(sats: Long): String? = channelInvoice
+        ?.takeIf { it.sats == sats && tuning.now() - it.mintedAt < CHANNEL_INVOICE_EXPIRY }
+        ?.bolt11
+
+    private suspend fun mintChannelInvoice(sats: Long): String? {
+        val request = LdkInvoiceRequest(amountSat = sats, expirySecs = CHANNEL_INVOICE_EXPIRY_SECONDS)
+        return when (val minted = api.ldkInvoice(request)) {
+            is BarkdResult.Ok -> minted.value.bolt11.also {
+                channelInvoice = ChannelInvoice(sats = sats, bolt11 = it, mintedAt = tuning.now())
+            }
+            is BarkdResult.HttpError -> {
+                if (minted.isLdkNotInitialized()) markLdkUnavailable()
+                null // the code stays ark-only; health is untouched, channels are auxiliary
+            }
+            is BarkdResult.Unreachable -> null
+        }
+    }
+
+    /** One minted channel invoice and what it was minted for, so it can be reused or aged out. */
+    private data class ChannelInvoice(val sats: Long, val bolt11: String, val mintedAt: Instant)
 
     // --- Send ---
 

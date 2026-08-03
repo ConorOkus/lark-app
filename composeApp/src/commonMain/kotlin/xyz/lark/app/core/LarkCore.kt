@@ -56,6 +56,19 @@ interface LarkCore {
     /** The one "Get paid" code (works from any bitcoin or Lightning wallet). */
     val receiveCode: String
 
+    /**
+     * The receive code for a specific requested amount, which may carry more than [receiveCode]
+     * can: a core with Lightning channels mints an invoice for [sats] and returns a BIP-321 URI
+     * offering both destinations.
+     *
+     * Suspending because minting is a network call, and separate from [receiveCode] because that
+     * one is a synchronous property with no amount — it cannot express "an invoice for N sats".
+     * The default is honest for every core that cannot mint: today's amountless code, unchanged.
+     * Implementations return a usable code or fall back to [receiveCode]; they never fail, and
+     * never return an invoice that cannot be paid.
+     */
+    suspend fun requestReceiveCode(sats: Long): String = receiveCode
+
     /** On-chain deposit address; surfaced in Advanced only. */
     val depositAddress: String
 
