@@ -26,10 +26,10 @@ class GatewayLarkCoreChannelSendTest {
 
     private companion object {
         const val SATS = 50_000L
-        const val NOT_INITIALIZED = """{"message": "Failed to pay invoice: LDK node not initialized"}"""
-    }
 
-    private fun forkScript(): BarkdScript = BarkdScript(BarkdScript.forkDefaults)
+        /** The deployed stack's actual answer, spec-validated in BarkdFixtureSpecTest. */
+        val NOT_INITIALIZED = BarkdFixtures.FORK_LDK_NOT_INITIALIZED
+    }
 
     /** One usable channel with 500,000 sats of outbound liquidity — enough to carry [SATS]. */
     private fun BarkdScript.withUsableChannel(localMsat: Long = 500_000_000L) = apply {
@@ -45,15 +45,6 @@ class GatewayLarkCoreChannelSendTest {
                 BarkdScript.Json(BarkdFixtures.forkLdkPayment(status)),
             )
         }
-    }
-
-    /** A settled fork core with channels already polled into the routing snapshot. */
-    private fun TestScope.settledForkCore(script: BarkdScript): GatewayLarkCore {
-        val core = gatewayCore(barkdEngine(script), variant = BarkdApiVariant.FORK_BETA6)
-        runCurrent()
-        core.createWallet()
-        runCurrent()
-        return core
     }
 
     // --- Terminal outcomes ---

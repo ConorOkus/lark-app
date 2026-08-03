@@ -29,6 +29,25 @@ internal const val GATEWAY_BASE_URL = "http://barkd.test"
 /** Frozen wall clock for deterministic relative-time labels (fixtures are timestamped 10:00Z). */
 internal val FIXED_NOW: Instant = Instant.parse("2026-07-28T12:00:00Z")
 
+/**
+ * The wall clock a harness core reads, frozen at [FIXED_NOW] until a test advances it.
+ *
+ * Wraps the Instant so callers never have to opt in to kotlin.time's experimental clock types
+ * just to age something out — they only ever pass a Duration.
+ */
+internal class TestClock {
+
+    // Not a constructor parameter: that would put an experimental type in the public signature
+    // and force every construction site to opt in just to build a clock.
+    private var current: Instant = FIXED_NOW
+
+    fun advanceBy(duration: Duration) {
+        current += duration
+    }
+
+    internal fun now(): Instant = current
+}
+
 /** Endpoint paths the gateway core touches, for scripting and request-count assertions. */
 internal object Paths {
     const val PING = "/ping"
@@ -187,6 +206,9 @@ internal fun TestScope.gatewayCore(
     backoff: List<Duration> = listOf(1.seconds, 2.seconds, 4.seconds),
     settlementAttempts: Int = 3,
     ldkReprobeCycles: Int = 3,
+    // Frozen by default so relative-time labels stay deterministic; pass a clock and advance it
+    // to exercise anything that ages out (a minted invoice's expiry, for instance).
+    clock: TestClock = TestClock(),
     scope: CoroutineScope = backgroundScope,
 ): GatewayLarkCore = GatewayLarkCore(
     api = BarkdApi(engine, GATEWAY_BASE_URL, variant = variant),
@@ -201,9 +223,29 @@ internal fun TestScope.gatewayCore(
         settlementAttempts = settlementAttempts,
         settlementPollDelay = 1.seconds,
         ldkReprobeCycles = ldkReprobeCycles,
-        now = { FIXED_NOW },
+        now = clock::now,
     ),
 )
+
+/** A script answering the fork surface's defaults. */
+internal fun forkScript(): BarkdScript = BarkdScript(BarkdScript.forkDefaults)
+
+/**
+ * A fork core with its wallet adopted and one poll cycle settled.
+ *
+ * Fork daemons are probe-less — the wallet only becomes ours through `createWallet()` — so every
+ * fork test needs this same three-step dance before it can assert anything.
+ */
+internal fun TestScope.settledForkCore(
+    script: BarkdScript,
+    clock: TestClock = TestClock(),
+): GatewayLarkCore {
+    val core = gatewayCore(barkdEngine(script), variant = BarkdApiVariant.FORK_BETA6, clock = clock)
+    runCurrent()
+    core.createWallet()
+    runCurrent()
+    return core
+}
 
 /** Advances virtual time by [duration] and runs the tasks that land exactly on the new mark. */
 internal fun TestScope.advanceThrough(duration: Duration) {

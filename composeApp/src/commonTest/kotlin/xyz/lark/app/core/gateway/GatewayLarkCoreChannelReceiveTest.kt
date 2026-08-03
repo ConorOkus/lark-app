@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Channel receive (plan U6, R7/R8/R9). The inbound-liquidity guard is the point: a channel the
@@ -21,12 +22,10 @@ class GatewayLarkCoreChannelReceiveTest {
     private companion object {
         const val SATS = 50_000L
         const val ARK_URI = "bitcoin:?ark=ark1qf2knext"
-        const val NOT_INITIALIZED = """{"message": "Failed to create invoice: LDK node not initialized"}"""
+        val NOT_INITIALIZED = BarkdFixtures.FORK_LDK_NOT_INITIALIZED
         val INVOICE = BarkdFixtures.FORK_LDK_INVOICE
             .substringAfter("\"bolt11\": \"").substringBefore("\"")
     }
-
-    private fun forkScript(): BarkdScript = BarkdScript(BarkdScript.forkDefaults)
 
     /**
      * A usable channel with [inboundSat] on the counterparty's side. Capacity minus our balance
@@ -38,14 +37,6 @@ class GatewayLarkCoreChannelReceiveTest {
             Paths.CHANNELS,
             BarkdScript.Json("[${channelJson("aa11bb22", localMsat = localMsat, capacitySat = capacitySat)}]"),
         )
-    }
-
-    private fun TestScope.settledForkCore(script: BarkdScript): GatewayLarkCore {
-        val core = gatewayCore(barkdEngine(script), variant = BarkdApiVariant.FORK_BETA6)
-        runCurrent()
-        core.createWallet()
-        runCurrent()
-        return core
     }
 
     // --- The channel receive path ---
@@ -168,6 +159,30 @@ class GatewayLarkCoreChannelReceiveTest {
         val second = core.requestReceiveCode(SATS)
         assertEquals(first, second)
         assertEquals(1, script.countOf(Paths.LDK_INVOICE))
+    }
+
+    /**
+     * An invoice is only reusable inside the expiry it was minted with. Past that window it is
+     * no longer payable, so serving it again would hand out a code that silently cannot be paid.
+     */
+    @Test
+    fun aCachedInvoicePastItsExpiryIsReMintedRatherThanServedStale() = runTest {
+        val script = forkScript().withInbound(inboundSat = 200_000L)
+        val clock = TestClock()
+        val core = settledForkCore(script, clock = clock)
+
+        core.requestReceiveCode(SATS)
+        assertEquals(1, script.countOf(Paths.LDK_INVOICE))
+
+        // Still inside the 3600s window the mint requested: reused, not re-minted.
+        clock.advanceBy(3_599.seconds)
+        core.requestReceiveCode(SATS)
+        assertEquals(1, script.countOf(Paths.LDK_INVOICE), "still payable, so still reusable")
+
+        // Past it: the cached invoice has expired and must not be served again.
+        clock.advanceBy(2.seconds)
+        core.requestReceiveCode(SATS)
+        assertEquals(2, script.countOf(Paths.LDK_INVOICE), "expired invoices are re-minted")
     }
 
     @Test

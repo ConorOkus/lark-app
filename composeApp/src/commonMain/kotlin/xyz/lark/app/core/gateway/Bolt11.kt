@@ -78,9 +78,12 @@ private fun humanReadablePart(destination: String): String? {
  * Longest prefix wins: `tb` prefixes `tbs` and `bc` prefixes `bcrt`, so a shortest match would
  * read every signet invoice as testnet and treat a wrong-network send as payable.
  */
-private fun networkOf(hrp: String): Bolt11Network? = Bolt11Network.entries
-    .sortedByDescending { it.hrpPrefix.length }
-    .firstOrNull { hrp.startsWith(it.hrpPrefix) }
+private fun networkOf(hrp: String): Bolt11Network? =
+    NETWORKS_LONGEST_PREFIX_FIRST.firstOrNull { hrp.startsWith(it.hrpPrefix) }
+
+/** Ordered once, not per parse — the ordering is what makes the prefix match correct. */
+private val NETWORKS_LONGEST_PREFIX_FIRST: List<Bolt11Network> =
+    Bolt11Network.entries.sortedByDescending { it.hrpPrefix.length }
 
 private fun readAmount(network: Bolt11Network, amountPart: String): Bolt11 = when {
     amountPart.isEmpty() -> Bolt11.Amountless(network)
@@ -119,7 +122,13 @@ private fun Long.timesOrNull(factor: Long): Long? =
 
 private const val INVOICE_SCHEME = "ln"
 private const val BECH32_SEPARATOR = '1'
-private const val MSAT_PER_SAT = 1_000L
+
+/**
+ * Millisats per satoshi. Lives here because this is the lowest-level module that needs it, and
+ * channel liquidity math ([outboundLiquiditySat]) reads the same constant rather than repeating
+ * the number — both truncate toward zero so the wallet never overclaims a satoshi.
+ */
+internal const val MSAT_PER_SAT = 1_000L
 
 // One BTC is 100,000,000,000 msat; each multiplier is a decimal step down from it.
 private const val MSAT_PER_BTC = 100_000_000_000L

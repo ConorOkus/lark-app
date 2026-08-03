@@ -155,6 +155,5 @@ internal fun ldkSettlementOf(wireStatus: String): LdkSettlement =
 internal fun BarkdResult.HttpError.isLdkNotInitialized(): Boolean =
     status >= HTTP_SERVER_ERROR && body.contains(LDK_NOT_INITIALIZED_MARKER, ignoreCase = true)
 
-private const val MSAT_PER_SAT = 1_000L
 private const val HTTP_SERVER_ERROR = 500
 private const val LDK_NOT_INITIALIZED_MARKER = "LDK node not initialized"
