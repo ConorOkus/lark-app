@@ -42,11 +42,23 @@ private const val HTTP_SERVER_ERROR_MIN = 500
 private const val HTTP_NOT_FOUND = 404
 
 /**
- * STALE when the soonest VTXO expiry is within `vtxo_expiry_delta / 2` blocks of the tip:
- * half the refresh window gone without a refresh is a reasonable "open me more often" line,
- * pending a product-tuned threshold (R6 leaves the derivation to us).
+ * STALE when the soonest *spendable* VTXO expiry is within `vtxo_expiry_delta / 8` blocks of
+ * the tip — the last eighth of the refresh window.
+ *
+ * Was `/ 2`, which measured as permanently on against the hosted mutinynet stack: half of an
+ * 8,640-block window is 4,320 blocks, and mutinynet's ~30s blocks make that ~36 hours of a
+ * ~72-hour lifetime. A wallet cannot be "needs a moment" for half of its life and still mean
+ * anything. Half-life is a defensible line only at ~10-minute spacing, where the same window is
+ * ~60 days; the divisor has to be tight enough to survive fast-block chains too.
+ *
+ * An eighth is ~9 hours on mutinynet and ~7.5 days at 10-minute spacing — both leave far more
+ * than the one round plus a few confirmations a refresh actually needs, while keeping the card
+ * rare enough that its appearance carries information.
  */
-private const val STALE_THRESHOLD_DIVISOR = 2
+private const val STALE_THRESHOLD_DIVISOR = 8
+
+/** `state.type` of a VTXO that can still take part in a refresh round. */
+private const val VTXO_STATE_SPENDABLE = "spendable"
 
 /** Rejected `addresses/next` mints re-try on later cycles, but only this many times. */
 private const val MAX_REJECTED_MINT_ATTEMPTS = 3
@@ -522,9 +534,20 @@ class GatewayLarkCore(
         }
     }
 
+    /**
+     * Only *spendable* VTXOs count, because only they can be acted on.
+     *
+     * A locked VTXO — one committed to an in-flight Lightning send — cannot join a refresh round,
+     * so counting it made the banner ask for an action that could not clear the condition: the
+     * card stayed up until the payment settled, no matter how many times it was tapped. Measured
+     * live 2026-08-02: two locked VTXOs 3,576 blocks from expiry held the banner on while the
+     * wallet's actual spendable balance had just been refreshed to 8,612 of 8,640 blocks.
+     */
     private fun vtxosNearExpiry(): Boolean {
         val expiryDelta = cachedArkInfo?.vtxoExpiryDelta ?: return false
-        val minExpiry = vtxos.minOfOrNull { it.expiryHeight }
+        val minExpiry = vtxos
+            .filter { it.state.type == VTXO_STATE_SPENDABLE }
+            .minOfOrNull { it.expiryHeight }
         return minExpiry != null &&
             tipHeight > 0 &&
             minExpiry - tipHeight <= expiryDelta / STALE_THRESHOLD_DIVISOR

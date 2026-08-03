@@ -186,13 +186,65 @@ class GatewayLarkCoreHealthTest {
     }
 
     @Test
-    fun staleWhenSoonestVtxoExpiryNearsChainTip() = runTest {
+    fun staleWhenSoonestSpendableVtxoExpiryNearsChainTip() = runTest {
         val script = BarkdScript()
-        // The vendored fixture: expiry 918,402 vs tip 916,214 = 2,188 blocks left, under 12,960 / 2.
-        script.sticky(Paths.VTXOS, BarkdScript.Json(BarkdFixtures.VTXOS))
+        // Tip 916,214, expiry delta 12,960 → the threshold is 12,960 / 8 = 1,620 blocks.
+        // Expiry 917,000 leaves 786 blocks: inside the last eighth of the window.
+        script.sticky(Paths.VTXOS, BarkdScript.Json(vtxosJson(VtxoFixture(expiryHeight = 917_000))))
         val core = gatewayCore(barkdEngine(script))
         runCurrent()
         assertEquals(HealthState.STALE, core.health.value)
+    }
+
+    /**
+     * The old threshold was `delta / 2`, which called a wallet stale for the whole second half of
+     * its VTXO lifetime — permanently on against a fast-block chain like mutinynet.
+     */
+    @Test
+    fun readyWhileOnlyPastTheHalfwayPointOfTheExpiryWindow() = runTest {
+        val script = BarkdScript()
+        // 2,188 blocks left of 12,960: past halfway, nowhere near the deadline.
+        script.sticky(Paths.VTXOS, BarkdScript.Json(vtxosJson(VtxoFixture(expiryHeight = 918_402))))
+        val core = gatewayCore(barkdEngine(script))
+        runCurrent()
+        assertEquals(HealthState.READY, core.health.value)
+    }
+
+    /**
+     * A locked VTXO is committed to an in-flight Lightning send and cannot join a refresh round,
+     * so it must not raise the banner: tapping it could never clear the condition.
+     */
+    @Test
+    fun lockedVtxoNearExpiryDoesNotMakeTheWalletStale() = runTest {
+        val script = BarkdScript()
+        script.sticky(
+            Paths.VTXOS,
+            BarkdScript.Json(vtxosJson(VtxoFixture(expiryHeight = 917_000, state = "locked"))),
+        )
+        val core = gatewayCore(barkdEngine(script))
+        runCurrent()
+        assertEquals(HealthState.READY, core.health.value)
+    }
+
+    /**
+     * The live shape that produced the false banner: money is locked behind a payment *and* the
+     * spendable remainder is freshly refreshed. Only the spendable one may be consulted.
+     */
+    @Test
+    fun lockedVtxoIsIgnoredEvenAlongsideAHealthySpendableOne() = runTest {
+        val script = BarkdScript()
+        script.sticky(
+            Paths.VTXOS,
+            BarkdScript.Json(
+                vtxosJson(
+                    VtxoFixture(expiryHeight = 917_000, state = "locked"),
+                    VtxoFixture(expiryHeight = 929_174, state = "spendable"),
+                ),
+            ),
+        )
+        val core = gatewayCore(barkdEngine(script))
+        runCurrent()
+        assertEquals(HealthState.READY, core.health.value)
     }
 
     @Test
