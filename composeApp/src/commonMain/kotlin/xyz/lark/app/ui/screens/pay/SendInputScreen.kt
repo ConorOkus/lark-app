@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,7 +92,11 @@ fun SendInputScreen(
             color = LarkColors.TextPrimary,
             modifier = Modifier.padding(top = TitleTopGap, bottom = TitleBottomGap),
         )
-        InputCard(send = model.send, onInput = machine::setSendInput)
+        InputCard(
+            send = model.send,
+            onInput = machine::setSendInput,
+            onPasteFailed = machine::sendInputPasteFailed,
+        )
         Text(
             text = model.send.inputSummary,
             style = LarkTheme.typography.bodySmall,
@@ -149,7 +154,7 @@ private fun SendInputTopRow(onBack: () -> Unit, onScan: () -> Unit) {
  * tells the user what was recognized.
  */
 @Composable
-private fun InputCard(send: SendModel, onInput: (String) -> Unit) {
+private fun InputCard(send: SendModel, onInput: (String) -> Unit, onPasteFailed: () -> Unit) {
     val shape = RoundedCornerShape(InputCardRadius)
     val clipboard = LocalClipboardManager.current
     val borderColor = if (send.inputResolved) {
@@ -198,15 +203,30 @@ private fun InputCard(send: SendModel, onInput: (String) -> Unit) {
         )
         InputCardAction(
             label = if (send.recipientHandle.isEmpty()) "PASTE" else "CLEAR",
-            onClick = {
-                if (send.recipientHandle.isEmpty()) {
-                    clipboard.getText()?.text?.let(onInput)
-                } else {
-                    onInput("")
-                }
-            },
+            onClick = { pasteOrClear(send, clipboard, onInput, onPasteFailed) },
         )
     }
+}
+
+/**
+ * The trailing affordance's action: clear when the field has content, otherwise read the clipboard.
+ *
+ * iOS gates programmatic clipboard reads behind a system prompt, so the read can legitimately come
+ * back empty. Reporting that beats a dead-looking button, and the field's own long-press paste goes
+ * through system UI, which is not gated — so there is a working alternative to point the user at.
+ */
+private fun pasteOrClear(
+    send: SendModel,
+    clipboard: ClipboardManager,
+    onInput: (String) -> Unit,
+    onPasteFailed: () -> Unit,
+) {
+    if (send.recipientHandle.isNotEmpty()) {
+        onInput("")
+        return
+    }
+    val pasted = clipboard.getText()?.text?.takeIf { it.isNotBlank() }
+    if (pasted == null) onPasteFailed() else onInput(pasted)
 }
 
 /** The card's trailing gold affordance (PASTE while empty, CLEAR once there is something). */

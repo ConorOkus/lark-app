@@ -84,6 +84,8 @@ private data class MachineState(
      * suspending call and rendering must stay pure — null falls back to the core's own code.
      */
     val receiveCode: String? = null,
+    /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
+    val pasteFailed: Boolean = false,
 )
 
 /**
@@ -268,8 +270,18 @@ class AppStateMachine(
      * is cleared because a raw destination has none — the render falls back to its abbreviation.
      */
     fun setSendInput(raw: String) = update {
-        it.copy(input = raw, sendWho = "", scannedSats = null, digits = "")
+        it.copy(input = raw, sendWho = "", scannedSats = null, digits = "", pasteFailed = false)
     }
+
+    /**
+     * The paste affordance produced nothing.
+     *
+     * iOS gates programmatic clipboard reads behind a system prompt, so a read can legitimately
+     * come back empty — the user dismissed the prompt, or the clipboard holds no text. Saying so
+     * matters: silently doing nothing reads as a dead button, and the field's own long-press
+     * paste goes through system UI and is not gated, so there is a working alternative to point at.
+     */
+    fun sendInputPasteFailed() = update { it.copy(pasteFailed = true) }
 
     /**
      * Continue from the recipient screen.
@@ -610,6 +622,8 @@ class AppStateMachine(
 
     /** The line under the input card: what was recognized, or that nothing was. */
     private fun sendInputSummary(s: MachineState, input: SendInput): String = when {
+        s.input.isBlank() && s.pasteFailed ->
+            "Nothing came through from the clipboard. Long-press the field to paste, or type it in."
         s.input.isBlank() -> "A name, an invoice, or a bitcoin address — LARK works out the rest."
         !input.isResolved -> "That doesn’t look like an invoice or address LARK can pay."
         input.amountSat != null -> "Invoice for ${primary(input.amountSat, s.denomination)}."

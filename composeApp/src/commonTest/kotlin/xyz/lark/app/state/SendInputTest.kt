@@ -116,6 +116,55 @@ class SendInputTest {
         }
     }
 
+    // --- A paste that yields nothing (iOS gates clipboard reads) ---
+
+    /**
+     * iOS prompts before any programmatic clipboard read, so the read can come back empty when the
+     * user dismisses it. Silently doing nothing made PASTE look like a dead button — observed on
+     * device. The screen must be told, and it must point at the ungated alternative.
+     */
+    @Test
+    fun aPasteThatYieldsNothingSaysSoInsteadOfDoingNothing() = runTest {
+        val m = machine().atSendInput()
+        assertEquals(
+            "A name, an invoice, or a bitcoin address — LARK works out the rest.",
+            m.model.value.send.inputSummary,
+        )
+
+        m.sendInputPasteFailed()
+
+        assertEquals(
+            "Nothing came through from the clipboard. Long-press the field to paste, or type it in.",
+            m.model.value.send.inputSummary,
+        )
+        assertFalse(m.model.value.send.inputResolved, "a failed paste resolves nothing")
+    }
+
+    /** Once something does arrive, the failure notice must not linger. */
+    @Test
+    fun aLaterSuccessfulEntryClearsThePasteNotice() = runTest {
+        val m = machine().atSendInput()
+        m.sendInputPasteFailed()
+
+        m.setSendInput(amountInvoice)
+
+        assertEquals("Invoice for ₿50,000.", m.model.value.send.inputSummary)
+    }
+
+    /** Clearing the field returns to the ordinary hint, not the failure notice. */
+    @Test
+    fun clearingAfterAFailedPasteReturnsToTheOrdinaryHint() = runTest {
+        val m = machine().atSendInput()
+        m.sendInputPasteFailed()
+        m.setSendInput(amountInvoice)
+        m.setSendInput("")
+
+        assertEquals(
+            "A name, an invoice, or a bitcoin address — LARK works out the rest.",
+            m.model.value.send.inputSummary,
+        )
+    }
+
     // --- Where Continue goes ---
 
     /**
