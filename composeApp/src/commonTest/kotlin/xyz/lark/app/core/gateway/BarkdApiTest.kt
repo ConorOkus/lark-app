@@ -336,6 +336,89 @@ class BarkdApiTest {
         assertNull(api(fixtureEngine()).arkInfo().okValue().supportsChannels)
     }
 
+    // --- LDK payment surface (fork only) ---
+
+    @Test
+    fun ldkPayPostsOnlyTheInvoiceAndCarriesNoAmount() = runTest {
+        val engine = forkFixtureEngine()
+        val payment = forkApi(engine).ldkPay(LdkPayRequest(bolt11 = "lntbs500u1pjq2xyz")).okValue()
+        assertEquals("sent", payment.status)
+        assertEquals(HttpMethod.Post to "/api/v1/lightning/channels/ldk-pay", engine.singleRequestLine())
+        val body = engine.requestHistory.single().body.toByteArray().decodeToString()
+        assertTrue(body.contains("\"bolt11\":\"lntbs500u1pjq2xyz\""), body)
+        // The fork's schema has no amount field; sending one would be silently ignored and
+        // would hide the amount-match gate the routing decision depends on (plan R2).
+        assertTrue(!body.contains("amount"), body)
+    }
+
+    @Test
+    fun ldkPaymentGetsTheHashScopedPath() = runTest {
+        val engine = jsonEngine(BarkdFixtures.FORK_LDK_PAYMENT)
+        val hash = "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677"
+        val payment = forkApi(engine).ldkPayment(hash).okValue()
+        assertEquals(hash, payment.paymentHash)
+        assertEquals(
+            HttpMethod.Get to "/api/v1/lightning/channels/ldk-payment/$hash",
+            engine.singleRequestLine(),
+        )
+    }
+
+    @Test
+    fun ldkInvoicePostsAmountAndOmitsAbsentExpiry() = runTest {
+        val engine = forkFixtureEngine()
+        val invoice = forkApi(engine).ldkInvoice(LdkInvoiceRequest(amountSat = 50_000)).okValue()
+        assertTrue(invoice.bolt11.startsWith("lntbs"), invoice.bolt11)
+        assertEquals(HttpMethod.Post to "/api/v1/lightning/channels/ldk-invoice", engine.singleRequestLine())
+        val body = engine.requestHistory.single().body.toByteArray().decodeToString()
+        assertTrue(body.contains("\"amount_sat\":50000"), body)
+        assertTrue(!body.contains("expiry_secs"), body)
+    }
+
+    @Test
+    fun ldkInvoiceSendsAnExplicitExpiryWhenGiven() = runTest {
+        val engine = forkFixtureEngine()
+        forkApi(engine).ldkInvoice(LdkInvoiceRequest(amountSat = 1_000, expirySecs = 900)).okValue()
+        val body = engine.requestHistory.single().body.toByteArray().decodeToString()
+        assertTrue(body.contains("\"expiry_secs\":900"), body)
+    }
+
+    @Test
+    fun ldkPaymentsDecodesBothDirections() = runTest {
+        val engine = forkFixtureEngine()
+        val entries = forkApi(engine).ldkPayments().okValue()
+        assertEquals(listOf("outbound", "inbound"), entries.map { it.direction })
+        assertEquals(5_000_000L, entries.first().amountMsat)
+        assertEquals("no route found", entries.last().detail)
+        assertEquals(HttpMethod.Get to "/api/v1/lightning/channels/ldk-payments", engine.singleRequestLine())
+    }
+
+    @Test
+    fun ldkPaymentsDecodesAnEmptyList() = runTest {
+        assertEquals(emptyList(), forkApi(jsonEngine("[]")).ldkPayments().okValue())
+    }
+
+    @Test
+    fun ldkPaymentDecodesWithoutDetail() = runTest {
+        val body = """{"payment_hash": "ab", "status": "pending"}"""
+        assertNull(forkApi(jsonEngine(body)).ldkPayment("ab").okValue().detail)
+    }
+
+    /** An unknown status must reach the caller as a string, so it can be treated as non-terminal. */
+    @Test
+    fun ldkPaymentDecodesAnUnrecognizedStatus() = runTest {
+        val body = """{"payment_hash": "ab", "status": "quantum-tunnelling"}"""
+        assertEquals("quantum-tunnelling", forkApi(jsonEngine(body)).ldkPayment("ab").okValue().status)
+    }
+
+    /** The deployed stack's actual answer; the send path keys its safe fallback on this body. */
+    @Test
+    fun ldkNotInitializedMapsToHttpErrorCarryingTheMessage() = runTest {
+        val engine = jsonEngine(BarkdFixtures.FORK_LDK_NOT_INITIALIZED, HttpStatusCode.InternalServerError)
+        val error = assertIs<BarkdResult.HttpError>(forkApi(engine).ldkPay(LdkPayRequest(bolt11 = "lntbs1")))
+        assertEquals(500, error.status)
+        assertTrue(error.body.contains("LDK node not initialized"), error.body)
+    }
+
     // --- Auth decoration ---
 
     @Test
@@ -369,8 +452,11 @@ class BarkdApiTest {
                     chainSource = ChainSourceConfig(esplora = EsploraChainSource(url = "https://esplora.test")),
                 ),
             ),
+            forkApi.ldkPay(LdkPayRequest(bolt11 = "lntbs500u1pjq2xyz")),
+            forkApi.ldkInvoice(LdkInvoiceRequest(amountSat = 1_000)),
+            forkApi.ldkPayments(),
         )
-        assertEquals(4, engine.requestHistory.size)
+        assertEquals(7, engine.requestHistory.size)
         engine.requestHistory.forEach { request ->
             assertEquals(
                 "marker-1",

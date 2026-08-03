@@ -501,18 +501,18 @@ class AppStateMachineFlowsTest {
     }
 
     @Test
-    fun pasteInvoiceResolvesJack() = runTest {
+    fun aLightningAddressResolvesAndReadsAsItsOwnName() = runTest {
         val m = machine()
         m.push(Route.SEND_INPUT)
         with(m.model.value.send) {
             assertEquals("Name, invoice or address", inputDisplay)
             assertFalse(inputResolved)
         }
-        m.pasteInvoice()
+        m.setSendInput("jack@lark.money")
         with(m.model.value.send) {
             assertEquals("jack@lark.money", inputDisplay)
             assertTrue(inputResolved)
-            assertEquals("Jack", recipientName)
+            assertEquals("jack@lark.money", recipientName)
         }
     }
 

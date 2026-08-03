@@ -23,19 +23,8 @@ import kotlin.time.Duration.Companion.seconds
  */
 class GatewayLarkCoreForkTest {
 
-    private fun forkScript(): BarkdScript = BarkdScript(BarkdScript.forkDefaults)
-
     private fun TestScope.forkCore(script: BarkdScript): GatewayLarkCore =
         gatewayCore(barkdEngine(script), variant = BarkdApiVariant.FORK_BETA6)
-
-    /** Fork daemons are probe-less: the wallet only becomes ours through `createWallet()`. */
-    private fun TestScope.settledForkCore(script: BarkdScript): GatewayLarkCore {
-        val core = forkCore(script)
-        runCurrent()
-        core.createWallet()
-        runCurrent()
-        return core
-    }
 
     // --- Notifications: poll cadence alone ---
 

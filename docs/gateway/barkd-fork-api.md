@@ -50,9 +50,39 @@ compile time; `BarkdCapabilities` encodes the differences below.
   signal — force-closed channels leave this list and become exits).
 - `GET /api/v1/lightning/channels/balance` → `LightningBalanceInfo{balance_sat}`
   (total local balance across usable channels).
-- Not consumed this milestone: `channels/open`, per-channel `refresh`,
-  `{channel_id}/force-close`, `ldk-invoice`, `ldk-pay`, `ldk-payment(s)`,
-  `offboard` (see the plan's Scope Boundaries).
+- Not consumed: `channels/open`, per-channel `refresh`,
+  `{channel_id}/force-close`, `offboard` (see the plan's Scope Boundaries).
+
+## LDK payment surface (fork-only, consumed by channel send/receive)
+
+- `POST /api/v1/lightning/channels/ldk-pay` → `LdkPayRequest{bolt11}` →
+  `LdkPaymentInfo{payment_hash, status, detail?}`. **No amount field:** the
+  invoice's own amount is what gets paid, which is why the app parses it before
+  routing here. A 200 means *accepted*, not settled.
+- `GET /api/v1/lightning/channels/ldk-payment/{hash}` → `LdkPaymentInfo`. The
+  settlement handle: polled until `status` is terminal.
+- `POST /api/v1/lightning/channels/ldk-invoice` →
+  `LdkInvoiceRequest{amount_sat, expiry_secs?}` →
+  `LdkInvoiceInfo{bolt11, payment_hash}`. `amount_sat` is required, so an
+  amountless Get paid cannot use this route.
+- `GET /api/v1/lightning/channels/ldk-payments` → `[LdkPaymentEntry]`
+  (`payment_hash`, `status`, `direction`, `amount_msat`, `detail?`). Decoded and
+  fixture-pinned; not read by the send or receive paths, which hold a hash.
+
+`status` is `pending` | `claimable` | `sent` | `claimed` | `failed`, documented
+in prose rather than as an enum. The app maps `sent`/`claimed` to success,
+`failed` to failure, and **everything else — including an unrecognized value —
+to non-terminal**, so a new status can only make it wait longer.
+
+`detail` is the **payment preimage** once sent (and a failure reason once
+failed). Treat it like the mnemonic: never logged, never surfaced.
+
+Every route here answers `500 {"message": "… LDK node not initialized"}` on a
+barkd built without a live LDK node — which the deployed Fly stack is, despite
+its ark-info reporting `supports_channels: true`. The app treats that exact body
+as "attempted nothing" and may fall back to the Ark path in place; any *other*
+`ldk-pay` failure refuses without retrying, because it cannot prove the payment
+was not attempted.
 
 ## Other fork-only surface (documented, not consumed)
 

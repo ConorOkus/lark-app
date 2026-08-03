@@ -12,12 +12,18 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -36,7 +42,6 @@ import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
-
 private val TopRowHeight = 44.dp
 private val TitleTopGap = 16.dp
 private val TitleBottomGap = 20.dp
@@ -87,17 +92,22 @@ fun SendInputScreen(
             color = LarkColors.TextPrimary,
             modifier = Modifier.padding(top = TitleTopGap, bottom = TitleBottomGap),
         )
-        InputCard(send = model.send, onClick = machine::pasteInvoice)
+        InputCard(
+            send = model.send,
+            onInput = machine::setSendInput,
+            onPasteFailed = machine::sendInputPasteFailed,
+        )
         Text(
-            text = "A name, an invoice, or a bitcoin address — LARK works out the rest.",
+            text = model.send.inputSummary,
             style = LarkTheme.typography.bodySmall,
             color = LarkColors.TextPrimary.copy(alpha = HINT_ALPHA),
             modifier = Modifier.padding(top = HintTopGap),
         )
         if (model.send.inputResolved) {
             GoldPillButton(
-                text = "Continue",
-                onClick = machine::goSendAmount,
+                // An amount-bearing invoice skips the keypad, so the label says where this goes.
+                text = if (model.send.fixedAmount) "Review payment" else "Continue",
+                onClick = machine::continueFromSendInput,
                 modifier = Modifier.fillMaxWidth().padding(top = ContinueTopGap),
                 height = ContinueHeight,
             )
@@ -135,10 +145,18 @@ private fun SendInputTopRow(onBack: () -> Unit, onScan: () -> Unit) {
     }
 }
 
-/** The recipient input card: gold border once resolved, trailing PASTE while empty. */
+/**
+ * The recipient input card: a real single-line field so an invoice can be typed or pasted, a gold
+ * border once the input resolves, and a trailing PASTE (clipboard) or CLEAR affordance.
+ *
+ * Single-line and horizontally scrolling by design — a BOLT11 invoice is far longer than the card,
+ * and wrapping it would push the rest of the screen off. The summary line below the card is what
+ * tells the user what was recognized.
+ */
 @Composable
-private fun InputCard(send: SendModel, onClick: () -> Unit) {
+private fun InputCard(send: SendModel, onInput: (String) -> Unit, onPasteFailed: () -> Unit) {
     val shape = RoundedCornerShape(InputCardRadius)
+    val clipboard = LocalClipboardManager.current
     val borderColor = if (send.inputResolved) {
         LarkColors.Gold.copy(alpha = RESOLVED_BORDER_ALPHA)
     } else {
@@ -151,34 +169,79 @@ private fun InputCard(send: SendModel, onClick: () -> Unit) {
             .clip(shape)
             .background(LarkColors.Surface)
             .border(width = 1.dp, color = borderColor, shape = shape)
-            .clickableNoRipple(onClick)
             .padding(InputCardPadding),
         horizontalArrangement = Arrangement.spacedBy(InputCardGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val textColor = if (send.inputResolved) {
-            LarkColors.TextPrimary
-        } else {
-            LarkColors.TextPrimary.copy(alpha = PLACEHOLDER_ALPHA)
-        }
-        Text(
-            text = send.inputDisplay,
-            style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 22.sp),
-            color = textColor,
+        BasicTextField(
+            value = send.recipientHandle,
+            onValueChange = onInput,
             modifier = Modifier.weight(1f),
+            textStyle = LarkTheme.typography.body.copy(
+                fontSize = 16.sp,
+                lineHeight = 22.sp,
+                color = LarkColors.TextPrimary,
+            ),
+            cursorBrush = SolidColor(LarkColors.Gold),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                autoCorrectEnabled = false,
+                capitalization = KeyboardCapitalization.None,
+            ),
+            decorationBox = { field ->
+                if (send.recipientHandle.isEmpty()) {
+                    Text(
+                        text = send.inputDisplay,
+                        style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 22.sp),
+                        color = LarkColors.TextPrimary.copy(alpha = PLACEHOLDER_ALPHA),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                field()
+            },
         )
-        if (!send.inputResolved) {
-            Text(
-                text = "PASTE",
-                style = LarkTheme.typography.itemTitle.copy(
-                    fontSize = 13.sp,
-                    lineHeight = 13.sp,
-                    letterSpacing = 0.06.em,
-                ),
-                color = LarkColors.Gold,
-            )
-        }
+        InputCardAction(
+            label = if (send.recipientHandle.isEmpty()) "PASTE" else "CLEAR",
+            onClick = { pasteOrClear(send, clipboard, onInput, onPasteFailed) },
+        )
     }
+}
+
+/**
+ * The trailing affordance's action: clear when the field has content, otherwise read the clipboard.
+ *
+ * iOS gates programmatic clipboard reads behind a system prompt, so the read can legitimately come
+ * back empty. Reporting that beats a dead-looking button, and the field's own long-press paste goes
+ * through system UI, which is not gated — so there is a working alternative to point the user at.
+ */
+private fun pasteOrClear(
+    send: SendModel,
+    clipboard: ClipboardManager,
+    onInput: (String) -> Unit,
+    onPasteFailed: () -> Unit,
+) {
+    if (send.recipientHandle.isNotEmpty()) {
+        onInput("")
+        return
+    }
+    val pasted = clipboard.getText()?.text?.takeIf { it.isNotBlank() }
+    if (pasted == null) onPasteFailed() else onInput(pasted)
+}
+
+/** The card's trailing gold affordance (PASTE while empty, CLEAR once there is something). */
+@Composable
+private fun InputCardAction(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = LarkTheme.typography.itemTitle.copy(
+            fontSize = 13.sp,
+            lineHeight = 13.sp,
+            letterSpacing = 0.06.em,
+        ),
+        color = LarkColors.Gold,
+        modifier = Modifier.clickableNoRipple(onClick),
+    )
 }
 
 /** One recent payee row: 38dp initial circle (gold-tinted for the first), who + handle. */

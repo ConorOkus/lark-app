@@ -296,3 +296,59 @@ data class EsploraChainSource(
     val url: String,
 )
 
+/**
+ * Fork `POST /api/v1/lightning/channels/ldk-pay` request. Carries the invoice and NOTHING
+ * else: the fork's schema has no amount field, so the bolt11's own amount is what gets paid.
+ * That is why [Bolt11] parses the amount before routing here (plan R2).
+ */
+@Serializable
+data class LdkPayRequest(
+    val bolt11: String,
+)
+
+/**
+ * The result of an LDK payment, from `ldk-pay` and `GET .../ldk-payment/{hash}`.
+ *
+ * [status] is one of `pending`, `claimable`, `sent`, `claimed`, `failed`, kept as a string so
+ * an unknown future status degrades to non-terminal instead of failing the decode
+ * ([ldkPaymentStatus] maps it). [detail] carries the **payment preimage** once sent, so it is
+ * a secret on the mnemonic's footing (plan R15): never log it, never surface it.
+ */
+@Serializable
+data class LdkPaymentInfo(
+    @SerialName("payment_hash") val paymentHash: String,
+    val status: String,
+    val detail: String? = null,
+)
+
+/** Fork `POST /api/v1/lightning/channels/ldk-invoice` request; [amountSat] is required. */
+@Serializable
+data class LdkInvoiceRequest(
+    @SerialName("amount_sat") val amountSat: Long,
+    /** Invoice lifetime; the fork defaults to 3600s when absent. Sent explicitly so the app
+     * knows the window it caches against (plan U6). */
+    @SerialName("expiry_secs") val expirySecs: Int? = null,
+)
+
+/** Fork `POST /api/v1/lightning/channels/ldk-invoice` response — a channel invoice to receive on. */
+@Serializable
+data class LdkInvoiceInfo(
+    val bolt11: String,
+    @SerialName("payment_hash") val paymentHash: String,
+)
+
+/**
+ * One entry of `GET /api/v1/lightning/channels/ldk-payments`. Not consumed by the send or
+ * receive paths (they hold a payment hash and read it directly); decoded so the endpoint is
+ * pinned by the fixture validator. [detail] is preimage-or-reason — a secret, per [LdkPaymentInfo].
+ */
+@Serializable
+data class LdkPaymentEntry(
+    @SerialName("payment_hash") val paymentHash: String,
+    val status: String,
+    /** `inbound` or `outbound`. */
+    val direction: String,
+    @SerialName("amount_msat") val amountMsat: Long,
+    val detail: String? = null,
+)
+

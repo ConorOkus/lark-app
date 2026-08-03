@@ -47,4 +47,37 @@ abstract class LarkCoreContractTest : LarkCoreLifecycleContractTest() {
         fixture.settle()
         assertEquals(0L, core.balanceSats.value)
     }
+
+    // --- Receive code (seam contract for the amount-specific request) ---
+
+    /**
+     * `requestReceiveCode` degrades, it never fails: whatever a core can or cannot mint for a
+     * requested amount, it must still hand back something payable. A core that answered with an
+     * empty string would leave Get paid with a blank QR, which is worse than offering the
+     * amountless code — so no core may do it.
+     */
+    @Test
+    fun requestingACodeForAnAmountNeverLosesTheReceiveCode() = runContractTest {
+        val fixture = fixture()
+        val core = fixture.settledWithWallet()
+        val amountless = core.receiveCode
+        assertTrue(amountless.isNotEmpty(), "fixture contract: a settled wallet has a receive code")
+
+        val requested = core.requestReceiveCode(CONTRACT_SEND_SATS)
+        assertTrue(
+            requested.isNotEmpty(),
+            "a core that cannot mint for an amount must fall back to its amountless code",
+        )
+        assertTrue(
+            requested.startsWith(amountless),
+            "the amount-specific code extends the amountless one rather than replacing it: $requested",
+        )
+    }
+
+    /** An amountless request is exactly today's code on every core. */
+    @Test
+    fun requestingACodeForNoAmountIsTheAmountlessCode() = runContractTest {
+        val core = fixture().settledWithWallet()
+        assertEquals(core.receiveCode, core.requestReceiveCode(0L))
+    }
 }
