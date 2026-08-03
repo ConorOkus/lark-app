@@ -155,5 +155,20 @@ internal fun ldkSettlementOf(wireStatus: String): LdkSettlement =
 internal fun BarkdResult.HttpError.isLdkNotInitialized(): Boolean =
     status >= HTTP_SERVER_ERROR && body.contains(LDK_NOT_INITIALIZED_MARKER, ignoreCase = true)
 
+/**
+ * Whether [paymentHash] is the hex-encoded 32-byte hash the fork's contract promises.
+ *
+ * Worth checking because the hash comes back from the daemon and is then interpolated into a
+ * request path ([BarkdApi.ldkPayment]): a value carrying `/`, `..`, or `?` would redirect the
+ * settlement poll at a different endpoint. The same validate-before-embedding rule the receive
+ * path already applies to addresses and invoices ([arkReceiveUri], [withLightningInvoice]).
+ */
+internal fun isLdkPaymentHash(paymentHash: String): Boolean =
+    paymentHash.length == LDK_PAYMENT_HASH_LENGTH && paymentHash.all { it in LDK_HEX_CHARS }
+
 private const val HTTP_SERVER_ERROR = 500
 private const val LDK_NOT_INITIALIZED_MARKER = "LDK node not initialized"
+
+/** 32 bytes, hex-encoded, lower or upper case. */
+private const val LDK_PAYMENT_HASH_LENGTH = 64
+private const val LDK_HEX_CHARS = "0123456789abcdefABCDEF"

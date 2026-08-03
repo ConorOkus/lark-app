@@ -624,7 +624,10 @@ class AppStateMachine(
      * QR and the code box always show the same live string (the one-source rule).
      */
     private fun renderReceive(s: MachineState): ReceiveModel = ReceiveModel(
-        code = s.receiveCode ?: core.receiveCode,
+        // A blank answer counts as no answer: a core asked for a code before it had minted an
+        // address returns "", and treating that as a real value would pin Get paid blank even
+        // after a later poll produced a usable code.
+        code = s.receiveCode?.takeIf { it.isNotEmpty() } ?: core.receiveCode,
         copied = s.copied,
         copyLabel = if (s.copied) "Copied" else "Copy",
         requestedAmount = if (s.receiveRequestSats > 0L) primary(s.receiveRequestSats, s.denomination) else null,

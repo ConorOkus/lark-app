@@ -198,6 +198,40 @@ class GatewayLarkCoreChannelSendTest {
         assertEquals(0, script.countOf(Paths.SEND))
     }
 
+    /**
+     * The hash comes from the daemon and is interpolated into the settlement poll's path, so a
+     * value carrying URI syntax could redirect that request at another endpoint. Reject it before
+     * it ever reaches a URL — the same rule the receive path applies to addresses and invoices.
+     */
+    @Test
+    fun aPaymentHashCarryingUriSyntaxNeverReachesARequestPath() = runTest {
+        val script = forkScript().withUsableChannel()
+        val injected = "../../wallet/mnemonic"
+        script.sticky(
+            Paths.LDK_PAY,
+            BarkdScript.Json("""{"payment_hash": "$injected", "status": "pending"}"""),
+        )
+        val core = settledForkCore(script)
+
+        assertEquals(SendResult.Failure, core.send(invoice, SATS))
+        assertEquals(0, script.countOf(Paths.MNEMONIC), "the injected path was never requested")
+        assertTrue(
+            script.seen.none { "ldk-payment" in it.url.encodedPath },
+            "no settlement poll may be issued for an invalid hash",
+        )
+        assertEquals(0, script.countOf(Paths.SEND), "and it is not retried over Ark")
+    }
+
+    @Test
+    fun aNonHexPaymentHashIsRejected() = runTest {
+        val script = forkScript().withUsableChannel()
+        script.sticky(
+            Paths.LDK_PAY,
+            BarkdScript.Json("""{"payment_hash": "zzzz", "status": "pending"}"""),
+        )
+        assertEquals(SendResult.Failure, settledForkCore(script).send(invoice, SATS))
+    }
+
     @Test
     fun anAcceptedPaymentWithNoUsableHashIsAFailureNotAnAcceptance() = runTest {
         val script = forkScript().withUsableChannel()

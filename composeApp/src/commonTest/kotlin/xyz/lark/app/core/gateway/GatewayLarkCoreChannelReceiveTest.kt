@@ -185,6 +185,33 @@ class GatewayLarkCoreChannelReceiveTest {
         assertEquals(2, script.countOf(Paths.LDK_INVOICE), "expired invoices are re-minted")
     }
 
+    /**
+     * A node that went away may not know an invoice it minted before it restarted, so the cache
+     * cannot survive an outage: after a recovery the same amount must be minted fresh rather than
+     * served an invoice the node may no longer honour.
+     */
+    @Test
+    fun anInvoiceCachedBeforeAnLdkOutageIsNotServedAfterRecovery() = runTest {
+        val script = forkScript().withInbound(inboundSat = 200_000L)
+        val core = settledForkCore(script)
+        core.requestReceiveCode(SATS)
+        assertEquals(1, script.countOf(Paths.LDK_INVOICE))
+
+        // The node goes away: the next poll cycle observes not-initialized.
+        script.sticky(Paths.CHANNELS, BarkdScript.Json(NOT_INITIALIZED, HttpStatusCode.InternalServerError))
+        advanceThrough(15.seconds)
+        assertEquals(ARK_URI, core.requestReceiveCode(SATS), "ark-only while the node is down")
+
+        // It comes back; the slow re-probe repopulates the channel list.
+        script.withInbound(inboundSat = 200_000L)
+        advanceThrough(15.seconds)
+        advanceThrough(15.seconds)
+        advanceThrough(15.seconds)
+
+        assertTrue(core.requestReceiveCode(SATS).contains("lightning="))
+        assertEquals(2, script.countOf(Paths.LDK_INVOICE), "minted fresh, not served from the stale cache")
+    }
+
     @Test
     fun aDifferentAmountMintsAgain() = runTest {
         val script = forkScript().withInbound(inboundSat = 200_000L)

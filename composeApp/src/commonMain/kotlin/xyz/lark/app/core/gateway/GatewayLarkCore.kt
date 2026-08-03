@@ -482,8 +482,10 @@ class GatewayLarkCore(
      * as it was and simply costs one attempt — a flaky read must not be mistaken for a verdict.
      */
     private suspend fun settleChannelPayment(accepted: LdkPaymentInfo): SendResult {
-        // A 2xx with no usable hash is a contract violation, not an acceptance: nothing to poll.
-        if (accepted.paymentHash.isBlank()) return SendResult.Failure
+        // A 2xx whose hash is missing or not the promised hex is a contract violation, not an
+        // acceptance: nothing to poll, and the hash is about to be interpolated into a request
+        // path, so a value carrying URI syntax must never get there.
+        if (!isLdkPaymentHash(accepted.paymentHash)) return SendResult.Failure
 
         var settlement = ldkSettlementOf(accepted.status)
         var attempts = 0
@@ -666,6 +668,9 @@ class GatewayLarkCore(
     private fun markLdkUnavailable() {
         ldkAvailable = false
         ldkReprobeSkips = 0
+        // A node that went away may not know this invoice when it returns, so a cached one can
+        // no longer be assumed payable — drop it rather than serve it after a recovery.
+        channelInvoice = null
     }
 
     private fun applyHistory(movements: List<Movement>) {

@@ -158,7 +158,13 @@ class BarkdApi(
             setBody(request)
         }
 
-    /** Fork only ([BarkdCapabilities.hasChannels]): the current state of one LDK payment. */
+    /**
+     * Fork only ([BarkdCapabilities.hasChannels]): the current state of one LDK payment.
+     *
+     * [paymentHash] lands in the request path, so callers must pass a hash they have validated
+     * (`isLdkPaymentHash`) — it arrives from the daemon, and URI syntax in it would redirect
+     * this request.
+     */
     suspend fun ldkPayment(paymentHash: String): BarkdResult<LdkPaymentInfo> =
         call(HttpMethod.Get, "/api/v1/lightning/channels/ldk-payment/$paymentHash")
 

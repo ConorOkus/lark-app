@@ -182,6 +182,41 @@ class ReceiveAmountTest {
         assertEquals("₿520", m.model.value.receive.requestedAmount, "the ask is still stated")
     }
 
+    /**
+     * A core asked for a code before it has minted an address answers with an empty string. That
+     * must not stick: once a later poll produces a usable code, Get paid has to show it, or the
+     * QR and code box stay blank until the user toggles the amount.
+     */
+    @Test
+    fun anEmptyAnswerDoesNotPinTheCodeBlankOnceTheCoreHasOne() = runTest {
+        val core = LateMintingCore()
+        val m = machineWith(core)
+
+        m.requestAmount("520")
+        runCurrent()
+        assertEquals("", m.model.value.receive.code, "nothing minted yet, so there is no code")
+
+        core.mint("bitcoin:?ark=ark1qf7late")
+        m.go(Route.RECEIVE) // any re-render
+
+        assertEquals("bitcoin:?ark=ark1qf7late", m.model.value.receive.code)
+    }
+
+    /** A core whose receive code only appears after a later poll, as the gateway's does. */
+    private class LateMintingCore(
+        private val fake: FakeLarkCore = FakeLarkCore(startWithWallet = true),
+    ) : LarkCore by fake {
+        private var minted: String = ""
+        override val receiveCode: String get() = minted
+
+        fun mint(code: String) {
+            minted = code
+        }
+
+        // Mirrors GatewayLarkCore: with no address yet there is nothing to build a code from.
+        override suspend fun requestReceiveCode(sats: Long): String = minted
+    }
+
     /** Copy must copy what is on screen — the composed code, not the bare address. */
     @Test
     fun copyingCopiesTheRenderedCode() = runTest {
