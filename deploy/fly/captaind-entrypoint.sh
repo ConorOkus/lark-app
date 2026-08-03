@@ -4,6 +4,10 @@
 #
 # Env (Fly secrets): PG_HOST PG_PORT PG_NAME PG_USER PG_PASS
 #   BITCOIND_URL BITCOIND_RPC_USER BITCOIND_RPC_PASS
+#   LDK_ANNOUNCE_ADDRESS (optional) — the host:port clients should dial to reach
+#     the embedded LDK node, e.g. the dedicated IPv4 as "203.0.113.10:9735".
+#     Unset means "advertise the bind address", which is only correct when the
+#     server actually owns its public address locally.
 set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-/data/captaind}"
@@ -20,7 +24,15 @@ sed \
   -e "s|__BITCOIND_URL__|${BITCOIND_URL}|g" \
   -e "s|__BITCOIND_RPC_USER__|${BITCOIND_RPC_USER}|g" \
   -e "s|__BITCOIND_RPC_PASS__|${BITCOIND_RPC_PASS}|g" \
+  -e "s|__LDK_ANNOUNCE_ADDRESS__|${LDK_ANNOUNCE_ADDRESS:-}|g" \
   /etc/captaind/captaind.toml.template > "$CONF"
+
+# An unset announce address must not leave `announce_address = ""` behind: captaind
+# parses it as a SocketAddr and would refuse to start. Drop the line so the config
+# falls back to advertising listen_address, which is the documented default.
+if [ -z "${LDK_ANNOUNCE_ADDRESS:-}" ]; then
+  sed -i '/^announce_address = ""$/d' "$CONF"
+fi
 
 echo "captaind.toml rendered (secrets redacted):"
 sed -E 's/(password|rpc_pass) = .*/\1 = "***"/' "$CONF"
