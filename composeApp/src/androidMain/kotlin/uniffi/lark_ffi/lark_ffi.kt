@@ -751,6 +751,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -795,6 +801,12 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_refresh(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_send_bolt11(`ptr`: Pointer,`invoice`: RustBuffer.ByValue,`sats`: Long,
+    ): Long
+    fun uniffi_lark_ffi_fn_func_async_probe_no_runtime(`value`: Int,
+    ): Long
+    fun uniffi_lark_ffi_fn_func_async_probe_tokio_tcp(`addr`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_lark_ffi_fn_func_async_probe_tokio_timer(`millis`: Int,
     ): Long
     fun uniffi_lark_ffi_fn_func_generate_mnemonic(`wordCount`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -916,6 +928,12 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_lark_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_lark_ffi_checksum_func_async_probe_no_runtime(
+    ): Short
+    fun uniffi_lark_ffi_checksum_func_async_probe_tokio_tcp(
+    ): Short
+    fun uniffi_lark_ffi_checksum_func_async_probe_tokio_timer(
+    ): Short
     fun uniffi_lark_ffi_checksum_func_generate_mnemonic(
     ): Short
     fun uniffi_lark_ffi_checksum_func_open_wallet(
@@ -963,6 +981,15 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_lark_ffi_checksum_func_async_probe_no_runtime() != 21307.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_func_async_probe_tokio_tcp() != 23735.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_func_async_probe_tokio_timer() != 20635.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lark_ffi_checksum_func_generate_mnemonic() != 13454.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -2109,6 +2136,89 @@ public object FfiConverterSequenceTypeMovementInfo: FfiConverterRustBuffer<List<
 
 
 
+
+        /**
+         * Probes for the U2 async blocker: an async export that touches **no runtime**.
+         *
+         * The wallet's async surface completes on iOS from a detached task but hangs on
+         * Android from anything other than the instrumentation thread
+         * (`docs/ffi/kotlin-bindings-status.md`). Two very different things could cause
+         * that, and they need different fixes:
+         *
+         * 1. UniFFI's Kotlin foreign-future machinery cannot deliver its continuation
+         * callback off the calling thread at all, or
+         * 2. only futures parked on the tokio reactor fail to wake the foreign side.
+         *
+         * This future is `Ready` on first poll and is exported *without*
+         * `async_runtime = "tokio"`, so it exercises path 1 alone: the poll/continuation
+         * round-trip, with no reactor, no waker from a Rust-owned thread, and no I/O.
+         * If this hangs off-thread the fault is in the bindings; if it completes, the
+         * fault is in how a tokio-parked future wakes the foreign continuation.
+         *
+         * Diagnostic surface, not seam surface — delete once the blocker is resolved.
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `asyncProbeNoRuntime`(`value`: kotlin.UInt) : kotlin.UInt {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_lark_ffi_fn_func_async_probe_no_runtime(FfiConverterUInt.lower(`value`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u32(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u32(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u32(future) },
+        // lift function
+        { FfiConverterUInt.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+        /**
+         * Third probe: parks on the tokio **I/O driver** rather than the timer.
+         *
+         * [`async_probe_tokio_timer`] proves a timer wake reaches the foreign
+         * continuation, but the timer and the I/O driver are separate wake paths inside
+         * tokio, and the wallet's chain source uses the I/O one (reqwest sockets). This
+         * opens a TCP connection and nothing else — no TLS, no HTTP, no bark — so a
+         * difference from the timer probe isolates the driver.
+         *
+         * Diagnostic surface, not seam surface — delete once the blocker is resolved.
+         */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `asyncProbeTokioTcp`(`addr`: kotlin.String) : kotlin.UInt {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_lark_ffi_fn_func_async_probe_tokio_tcp(FfiConverterString.lower(`addr`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u32(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u32(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u32(future) },
+        // lift function
+        { FfiConverterUInt.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+        /**
+         * The other half of the probe: identical shape, but parked on the tokio timer.
+         *
+         * Reaching the sleep's wake path means the reactor must wake the foreign
+         * continuation from a thread the caller never entered — the exact condition
+         * [`async_probe_no_runtime`] deliberately avoids. Kept trivial (no network, no
+         * sockets, no bark) so a difference between the two isolates the runtime rather
+         * than anything the wallet does.
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `asyncProbeTokioTimer`(`millis`: kotlin.UInt) : kotlin.UInt {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_lark_ffi_fn_func_async_probe_tokio_timer(FfiConverterUInt.lower(`millis`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u32(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u32(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u32(future) },
+        // lift function
+        { FfiConverterUInt.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
 
         /**
          * Generate a fresh BIP-39 mnemonic (12 or 24 words). The platform persists the

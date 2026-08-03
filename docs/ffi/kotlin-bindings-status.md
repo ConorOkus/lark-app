@@ -129,6 +129,39 @@ symptom.
 drives the crate correctly from a detached task, which is the shape an iOS adapter needs. The
 Kotlin adapter stays blocked, but on a much smaller and better-located problem.
 
+### Probed 2026-08-02: the Kotlin async machinery is NOT broken — it works off-thread
+
+"The fault is in the UniFFI Kotlin/JNA async path" was the right neighbourhood but too broad, and
+it would have sent the fix to the wrong place. `FfiAsyncProbeInstrumentedTest` drives three
+minimal async exports (`lib.rs`: `async_probe_no_runtime`, `async_probe_tokio_timer`,
+`async_probe_tokio_tcp`) from `scope.launch` on `Dispatchers.IO`, on the same emulator and the
+same `.so` where `openWallet` hangs:
+
+| Probe | What it exercises | `runBlocking` | `scope.launch` |
+| --- | --- | --- | --- |
+| no runtime (`Ready` on first poll) | the poll/continuation round-trip alone | passes | **passes** |
+| tokio timer (`sleep`) | a wake from a Rust-owned reactor thread | passes | **passes** |
+| tokio TCP (`TcpStream::connect`) | the tokio **I/O driver** wake path | passes | **passes** |
+
+All six green. So off the instrumentation thread, on Android: the foreign continuation callback
+*is* delivered, JNA *does* dispatch it from a Rust-owned thread, and both the timer and the I/O
+driver *do* wake it. Every generic mechanism the hang was blamed on is exonerated.
+
+The three probes were chosen to bracket the plumbing while sharing nothing with the wallet: no
+sockets to the internet, no TLS, no sqlite, no bark. What remains is therefore specific to what
+`openWallet` itself does — bark's `Wallet::create`/open path — not to UniFFI, JNA, or tokio.
+
+That also re-reads the original evidence. The stub logging `/block-height/0` and then nothing was
+taken as "the response came back and the future never woke". Given the probes, the more likely
+reading is that the future woke fine and then blocked *inside bark* on something that only
+completes when the caller is the instrumentation thread — a nested `block_on`, a blocking sqlite
+or CPU section on the poll thread, or a lock held across an await.
+
+**Next probe:** an export that does one piece of what `openWallet` does and nothing else — the bdk
+genesis fetch, or opening the sqlite database — called from `scope.launch`. That splits bark's
+chain access from its storage. The probes and their harness are already in place, so each new one
+is a few lines plus a rebuild.
+
 ## What to do next
 
 1. ~~**Reproduce on a device or emulator.**~~ **Done 2026-08-02 — it reproduces.** See the on-device
