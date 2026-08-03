@@ -47,6 +47,12 @@ internal object Paths {
     const val ARK_INFO = "/api/v1/wallet/ark-info"
     const val NEXT_ADDRESS = "/api/v1/wallet/addresses/next"
     const val CHANNELS = "/api/v1/lightning/channels"
+    const val LDK_PAY = "/api/v1/lightning/channels/ldk-pay"
+    const val LDK_INVOICE = "/api/v1/lightning/channels/ldk-invoice"
+    const val LDK_PAYMENTS = "/api/v1/lightning/channels/ldk-payments"
+
+    /** `ldk-payment` is hash-scoped, so its script path depends on the payment being polled. */
+    fun ldkPayment(paymentHash: String): String = "/api/v1/lightning/channels/ldk-payment/$paymentHash"
 }
 
 /** Spec fixtures adjusted so the default script describes a healthy mutinynet wallet. */
@@ -127,6 +133,9 @@ internal class BarkdScript(
             remove(Paths.WAIT)
             remove(Paths.HISTORY)
             BarkdFixtures.forkByPath.forEach { (path, body) -> put(path, Json(body)) }
+            // Hash-scoped, so it is not a forkByPath entry: a settlement poll for the fixture's
+            // own payment answers "sent" by default, and send tests override it per scenario.
+            put(Paths.ldkPayment(BarkdFixtures.LDK_PAYMENT_HASH), Json(BarkdFixtures.FORK_LDK_PAYMENT))
         }
     }
 }
@@ -176,6 +185,8 @@ internal fun TestScope.gatewayCore(
     networkLabel: String = if (variant == BarkdApiVariant.FORK_BETA6) "mutinynet" else expectedNetwork,
     pollInterval: Duration = 15.seconds,
     backoff: List<Duration> = listOf(1.seconds, 2.seconds, 4.seconds),
+    settlementAttempts: Int = 3,
+    ldkReprobeCycles: Int = 3,
     scope: CoroutineScope = backgroundScope,
 ): GatewayLarkCore = GatewayLarkCore(
     api = BarkdApi(engine, GATEWAY_BASE_URL, variant = variant),
@@ -187,6 +198,9 @@ internal fun TestScope.gatewayCore(
         pollInterval = pollInterval,
         offlineBackoff = backoff,
         longPollRetryDelay = 10.seconds,
+        settlementAttempts = settlementAttempts,
+        settlementPollDelay = 1.seconds,
+        ldkReprobeCycles = ldkReprobeCycles,
         now = { FIXED_NOW },
     ),
 )

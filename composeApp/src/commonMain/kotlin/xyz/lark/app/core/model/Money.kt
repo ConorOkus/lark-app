@@ -21,6 +21,22 @@ data class FiatRate(val satsPerCent: Long) {
 
 /** Outcome of [xyz.lark.app.core.LarkCore.send]. */
 sealed interface SendResult {
+
+    /** The payment settled. The money is gone and the recipient has it. */
     data object Success : SendResult
+
+    /** The payment did not happen. The balance is untouched. */
     data object Failure : SendResult
+
+    /**
+     * The payment was accepted but had not reached a terminal state before the core stopped
+     * waiting — the money may still be in flight (plan R5).
+     *
+     * Neither "Sent." nor a failure would be honest here: claiming success repeats the bug
+     * where an acknowledgement is presented as settlement, and claiming failure tells the user
+     * to retry a payment that may yet succeed. Only the channel path can produce this, because
+     * it is the only path that can observe settlement at all; the Ark path stays binary
+     * until its own acknowledgement gap is closed.
+     */
+    data object Pending : SendResult
 }

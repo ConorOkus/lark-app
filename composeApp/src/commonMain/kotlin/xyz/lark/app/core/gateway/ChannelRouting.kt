@@ -111,4 +111,44 @@ internal fun resolveSendRoute(
 
 private fun arkRoute(reason: ArkRouteReason): SendRoute = SendRoute.OverArk(reason)
 
+/** How far along an LDK payment is, collapsed to what the seam can say about it. */
+internal enum class LdkSettlement {
+    /** Terminal success: the money left and the recipient has it. */
+    SETTLED,
+
+    /** Terminal failure: the payment did not happen. */
+    FAILED,
+
+    /** Not terminal yet — keep waiting; the money may still be moving. */
+    IN_FLIGHT,
+}
+
+/**
+ * Maps a wire status onto [LdkSettlement]. The mapping is total on purpose: an unrecognized
+ * status is treated as non-terminal rather than guessed at, so a fork that adds a state can
+ * only ever make the app wait longer — never make it claim a settlement it did not observe.
+ */
+internal fun ldkSettlementOf(wireStatus: String): LdkSettlement =
+    when (wireStatus.trim().lowercase()) {
+        "sent", "claimed" -> LdkSettlement.SETTLED
+        "failed" -> LdkSettlement.FAILED
+        else -> LdkSettlement.IN_FLIGHT // pending, claimable, and anything new
+    }
+
+/**
+ * Whether this error is the fork's "there is no LDK node here" signal — the deployed stack's
+ * actual answer on every LDK route (probed 2026-08-03) despite ark-info advertising
+ * `supports_channels: true`.
+ *
+ * The send path keys a real decision on this: only a not-initialized failure proves the daemon
+ * attempted nothing, so only it may fall back to the Ark path in place. The match is
+ * deliberately narrow — if the fork ever rewords the message, this reads false, the failure
+ * classifies as generic, and the send resolves to a plain failure instead of a second payment
+ * attempt. It fails toward refusing, never toward paying twice.
+ */
+internal fun BarkdResult.HttpError.isLdkNotInitialized(): Boolean =
+    status >= HTTP_SERVER_ERROR && body.contains(LDK_NOT_INITIALIZED_MARKER, ignoreCase = true)
+
 private const val MSAT_PER_SAT = 1_000L
+private const val HTTP_SERVER_ERROR = 500
+private const val LDK_NOT_INITIALIZED_MARKER = "LDK node not initialized"

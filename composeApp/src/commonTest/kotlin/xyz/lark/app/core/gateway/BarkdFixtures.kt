@@ -197,20 +197,29 @@ object BarkdFixtures {
         }
     """.trimIndent()
 
-    // An LDK payment that settled: `detail` is the preimage, which is why the app treats the
-    // field as a secret (plan R15) and never renders or logs it.
+    /** The hash carried by the LDK fixtures; settlement polls are scripted on its own route. */
+    const val LDK_PAYMENT_HASH = "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677"
+
+    /** The preimage shape: a secret, which is why the app never renders or logs `detail` (R15). */
+    const val LDK_PREIMAGE = "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788ff"
+
+    // An LDK payment that settled.
     val FORK_LDK_PAYMENT = """
         {
-          "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677",
+          "payment_hash": "$LDK_PAYMENT_HASH",
           "status": "sent",
-          "detail": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788ff"
+          "detail": "$LDK_PREIMAGE"
         }
     """.trimIndent()
+
+    /** One LDK payment in an arbitrary [status], for driving the settlement loop. */
+    fun forkLdkPayment(status: String): String =
+        """{"payment_hash": "$LDK_PAYMENT_HASH", "status": "$status"}"""
 
     val FORK_LDK_INVOICE = """
         {
           "bolt11": "lntbs500u1pjq2xyzpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypq",
-          "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677"
+          "payment_hash": "$LDK_PAYMENT_HASH"
         }
     """.trimIndent()
 
@@ -218,11 +227,11 @@ object BarkdFixtures {
     val FORK_LDK_PAYMENTS = """
         [
           {
-            "payment_hash": "9f2c1ab4de5607f8319a4bb2cc7d0e1122334455667788990011223344556677",
+            "payment_hash": "$LDK_PAYMENT_HASH",
             "status": "sent",
             "direction": "outbound",
             "amount_msat": 5000000,
-            "detail": "aabbccddeeff00112233445566778899aabbccddeeff001122334455667788ff"
+            "detail": "$LDK_PREIMAGE"
           },
           {
             "payment_hash": "1122334455667788990011223344556677889900aabbccddeeff001122334455",

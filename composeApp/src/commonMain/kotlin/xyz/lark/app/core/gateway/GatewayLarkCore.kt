@@ -66,7 +66,19 @@ private const val MAX_REJECTED_MINT_ATTEMPTS = 3
 /** barkd has no fiat/price endpoint (R8): the demo rate stands in, clearly marked. */
 private const val DEMO_SATS_PER_CENT = 10L
 
+/**
+ * Settlement budget for a channel send: 10 polls a second apart, so an ordinary channel payment
+ * (sub-second in practice) resolves on the first or second read, while a stuck one gives up
+ * after ~10s and reports Pending rather than holding the send screen open indefinitely.
+ */
+private const val DEFAULT_SETTLEMENT_ATTEMPTS = 10
+private const val DEFAULT_SETTLEMENT_POLL_DELAY_SECONDS = 1
+
+/** ~2.5 minutes at the default cadence: slow enough to stop hammering, quick enough to notice. */
+private const val DEFAULT_LDK_REPROBE_CYCLES = 10
+
 private val DEFAULT_POLL_INTERVAL = DEFAULT_POLL_INTERVAL_SECONDS.seconds
+private val DEFAULT_SETTLEMENT_POLL_DELAY = DEFAULT_SETTLEMENT_POLL_DELAY_SECONDS.seconds
 private val DEFAULT_OFFLINE_BACKOFF = List(BACKOFF_STEPS) { BACKOFF_START_SECONDS.seconds * (1 shl it) }
 private val DEFAULT_LONG_POLL_RETRY = DEFAULT_LONG_POLL_RETRY_SECONDS.seconds
 
@@ -77,11 +89,22 @@ data class GatewayTuning(
     val offlineBackoff: List<Duration> = DEFAULT_OFFLINE_BACKOFF,
     /** Pause before re-issuing `notifications/wait` after a failed or idle long poll. */
     val longPollRetryDelay: Duration = DEFAULT_LONG_POLL_RETRY,
+    /**
+     * How many times a channel send polls `ldk-payment/{hash}` for a terminal state before
+     * resolving to [SendResult.Pending]. Bounded so a stuck HTLC cannot hold the send open (R5).
+     */
+    val settlementAttempts: Int = DEFAULT_SETTLEMENT_ATTEMPTS,
+    /** Wait between settlement polls. */
+    val settlementPollDelay: Duration = DEFAULT_SETTLEMENT_POLL_DELAY,
+    /** Poll cycles between LDK re-probes once the daemon reported no LDK node (R11). */
+    val ldkReprobeCycles: Int = DEFAULT_LDK_REPROBE_CYCLES,
     /** Wall clock behind the relative display timestamps. */
     val now: () -> Instant = { Clock.System.now() },
 ) {
     init {
         require(offlineBackoff.isNotEmpty()) { "offlineBackoff needs at least one step" }
+        require(settlementAttempts >= 1) { "settlementAttempts must allow at least one poll" }
+        require(ldkReprobeCycles >= 1) { "ldkReprobeCycles must be at least 1" }
     }
 }
 
@@ -173,6 +196,19 @@ class GatewayLarkCore(
 
     // Gateway-fed state behind the seam's plain properties; written only by poll cycles.
     private var vtxos: List<WalletVtxoInfo> = emptyList()
+
+    /** Raw wire channels behind [channelsFlow]'s display snapshot; routing money reads these. */
+    private var channelList: List<LightningChannelInfo> = emptyList()
+
+    /**
+     * Whether the daemon actually has a live LDK node — a *runtime* fact, separate from the
+     * compile-time [BarkdCapabilities.hasChannels] (which only says the routes exist on this
+     * surface). The deployed stack advertises `supports_channels: true` while every LDK route
+     * answers "LDK node not initialized", so channel support cannot be taken on trust (KTD-7).
+     * Optimistic until the daemon says otherwise.
+     */
+    private var ldkAvailable = true
+    private var ldkReprobeSkips = 0
     private var activityRows: List<Transaction> = emptyList()
     private var recentRows: List<Contact> = emptyList()
     private var mnemonicWords: List<String> = emptyList()
@@ -306,23 +342,104 @@ class GatewayLarkCore(
 
     // --- Send ---
 
+    /**
+     * Routes the send, then applies the guard that matches the route (plan R14).
+     *
+     * The spendability guard cannot be one check: `balanceFlow` is `spendable_sat`, which counts
+     * VTXOs, while a channel payment spends channel liquidity that `spendable_sat` does not
+     * include. Guarding a channel send on the VTXO balance would refuse payments the channel can
+     * carry; guarding an Ark send on channel liquidity would permit an overdraw. So the route is
+     * resolved first, and each branch is checked against the funds it actually spends —
+     * [resolveSendRoute] has already proven outbound liquidity for the channel branch.
+     */
     override suspend fun send(recipient: String, sats: Long): SendResult = sendMutex.withLock {
         val destination = resolveSendDestination(recipient)
-        val payable = !hardOffline &&
-            healthFlow.value != HealthState.OFFLINE &&
-            sats > 0 &&
-            sats <= balanceFlow.value
-        if (destination == null || !payable) SendResult.Failure else dispatchSend(destination, sats)
+        val sendable = !hardOffline && healthFlow.value != HealthState.OFFLINE && sats > 0
+        if (destination == null || !sendable) {
+            SendResult.Failure
+        } else {
+            when (val route = sendRouteFor(destination, sats)) {
+                is SendRoute.OverChannel -> payOverChannel(route.bolt11, destination, sats)
+                is SendRoute.OverArk -> dispatchArkSend(destination, sats)
+            }
+        }
     }
 
-    private suspend fun dispatchSend(destination: String, sats: Long): SendResult =
-        when (api.send(SendRequest(destination = destination, amountSat = sats))) {
-            is BarkdResult.Ok -> {
-                triggerPoll() // the debit arrives via the poll; the balance is never mutated locally
-                SendResult.Success
+    private fun sendRouteFor(destination: String, sats: Long): SendRoute = resolveSendRoute(
+        destination = destination,
+        sats = sats,
+        channels = channelList,
+        capabilities = api.capabilities,
+        ldkAvailable = ldkAvailable,
+        expectedNetwork = expectedNetwork,
+    )
+
+    /** Today's path, unchanged: a 200 reads as success, and #32 owns closing that gap. */
+    private suspend fun dispatchArkSend(destination: String, sats: Long): SendResult =
+        if (sats > balanceFlow.value) {
+            SendResult.Failure
+        } else {
+            when (api.send(SendRequest(destination = destination, amountSat = sats))) {
+                is BarkdResult.Ok -> {
+                    triggerPoll() // the debit arrives via the poll; the balance is never mutated locally
+                    SendResult.Success
+                }
+                else -> SendResult.Failure
             }
-            else -> SendResult.Failure
         }
+
+    /**
+     * Pays over one of the wallet's own channels, then waits for a real outcome.
+     *
+     * Failure handling splits on whether anything could have been attempted, because guessing
+     * wrong here risks paying twice. A not-initialized error proves the daemon has no LDK node
+     * and tried nothing, so this send may still go over Ark. Every other failure — a different
+     * 500, a contract error, unreachable — resolves to [SendResult.Failure] with **no** Ark
+     * retry: it cannot be proven the payment was not attempted, and re-sending could pay the
+     * invoice a second time.
+     */
+    private suspend fun payOverChannel(bolt11: String, destination: String, sats: Long): SendResult =
+        when (val accepted = api.ldkPay(LdkPayRequest(bolt11 = bolt11))) {
+            is BarkdResult.Ok -> settleChannelPayment(accepted.value)
+            is BarkdResult.HttpError ->
+                if (accepted.isLdkNotInitialized()) {
+                    markLdkUnavailable() // and every later send skips the LDK routes entirely
+                    dispatchArkSend(destination, sats)
+                } else {
+                    SendResult.Failure
+                }
+            is BarkdResult.Unreachable -> SendResult.Failure
+        }
+
+    /**
+     * Resolves an accepted payment to a terminal LDK state, or gives up honestly (plan R4/R5).
+     *
+     * `ldk-pay` returning 200 means accepted, not settled, so the returned hash is polled until
+     * the status is terminal or the attempt budget runs out. A poll that fails leaves the status
+     * as it was and simply costs one attempt — a flaky read must not be mistaken for a verdict.
+     */
+    private suspend fun settleChannelPayment(accepted: LdkPaymentInfo): SendResult {
+        // A 2xx with no usable hash is a contract violation, not an acceptance: nothing to poll.
+        if (accepted.paymentHash.isBlank()) return SendResult.Failure
+
+        var settlement = ldkSettlementOf(accepted.status)
+        var attempts = 0
+        while (settlement == LdkSettlement.IN_FLIGHT && attempts < tuning.settlementAttempts) {
+            attempts++
+            delay(tuning.settlementPollDelay)
+            val polled = api.ldkPayment(accepted.paymentHash)
+            if (polled is BarkdResult.Ok) settlement = ldkSettlementOf(polled.value.status)
+        }
+
+        // Poll either way: on success for the debit, and while in flight because the HTLC lock
+        // is already visible in the balance. The balance is never mutated locally.
+        if (settlement != LdkSettlement.FAILED) triggerPoll()
+        return when (settlement) {
+            LdkSettlement.SETTLED -> SendResult.Success
+            LdkSettlement.FAILED -> SendResult.Failure
+            LdkSettlement.IN_FLIGHT -> SendResult.Pending
+        }
+    }
 
     // --- Refresh ---
 
@@ -451,11 +568,41 @@ class GatewayLarkCore(
      * [CycleOutcome.note] and leave the snapshot at its previous value — null while never
      * fetched, the last good snapshot afterwards. A successful fetch of zero channels emits
      * a non-null empty snapshot: polled-and-zero, distinct from never-fetched.
+     *
+     * The raw wire list is kept alongside the display snapshot because routing money must read
+     * unrounded figures ([resolveSendRoute]), not presentation models.
      */
     private suspend fun fetchChannelsState() {
         if (!api.capabilities.hasChannels) return
-        val channelList = (api.channels() as? BarkdResult.Ok)?.value ?: return
-        channelsFlow.value = channelsSnapshot(channelList, tipHeight)
+        if (!ldkAvailable && !readyToReprobeLdk()) return
+        when (val result = api.channels()) {
+            is BarkdResult.Ok -> {
+                ldkAvailable = true
+                channelList = result.value
+                channelsFlow.value = channelsSnapshot(result.value, tipHeight)
+            }
+            // supports_channels can be true on a daemon with no LDK node at all; stop hammering.
+            is BarkdResult.HttpError -> if (result.isLdkNotInitialized()) markLdkUnavailable()
+            is BarkdResult.Unreachable -> Unit // ordinary transience; next cycle retries
+        }
+    }
+
+    /**
+     * Plan R11: once the daemon has said it has no LDK node, only every
+     * [GatewayTuning.ldkReprobeCycles]-th cycle touches the channel route. Without this the app
+     * issues a failing request every cycle forever, which is what it does against the deployed
+     * stack today. A slow re-probe still picks up a stack whose LDK comes up later.
+     */
+    private fun readyToReprobeLdk(): Boolean {
+        ldkReprobeSkips++
+        if (ldkReprobeSkips < tuning.ldkReprobeCycles) return false
+        ldkReprobeSkips = 0
+        return true
+    }
+
+    private fun markLdkUnavailable() {
+        ldkAvailable = false
+        ldkReprobeSkips = 0
     }
 
     private fun applyHistory(movements: List<Movement>) {
