@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 # Keep in sync with rust/fork-pins.toml.
-ARG BARK_SHA=38304d95f2bba98edee2560f2fc2a36f16f0d84f
+ARG BARK_SHA=f05e944d930d9484195c1bbac22f05c2900e6eb6
 ARG RL_SHA=0a0a489d634724708dbb194adf849151d2306cb4
 
 # Sibling layout: bark path-deps ../rust-lightning/lightning.
