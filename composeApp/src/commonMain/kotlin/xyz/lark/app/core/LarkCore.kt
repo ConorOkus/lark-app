@@ -77,7 +77,28 @@ interface LarkCore {
 
     fun createWallet()
 
+    /**
+     * Re-opens the wallet this device already has. Distinct from [restoreWallet] with words, which
+     * adopts a wallet from somewhere else.
+     */
     fun restoreWallet()
+
+    /**
+     * Restores the wallet identified by [words], returning whether it opened.
+     *
+     * Additive to the seam (M2): only a core that holds keys can do anything with a mnemonic, so
+     * the default is the no-arg restore — which is what DEMO and GATEWAY have always meant by
+     * "restore" and what their contract tests assert.
+     *
+     * False means the wallet is not open. It deliberately does not distinguish "those words were
+     * wrong" from "the chain source was unreachable": the caller's only useful move is the same
+     * either way, and a core cannot always tell them apart. Suspending because a real restore
+     * opens a wallet, which is slow.
+     */
+    suspend fun restoreWallet(words: List<String>): Boolean {
+        restoreWallet()
+        return walletExists.value
+    }
 
     fun markBackedUp()
 

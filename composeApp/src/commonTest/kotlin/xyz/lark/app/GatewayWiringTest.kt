@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.CoreMode
 import xyz.lark.app.core.FakeLarkCore
+import xyz.lark.app.core.gateway.BarkdApiVariant
 import xyz.lark.app.core.gateway.BarkdFixtures
 import xyz.lark.app.core.gateway.BarkdScript
 import xyz.lark.app.core.gateway.GATEWAY_BASE_URL
@@ -33,6 +34,10 @@ class GatewayWiringTest {
         scope = backgroundScope,
         gatewayBaseUrl = GATEWAY_BASE_URL,
         expectedNetwork = "mutinynet",
+        // Pinned, not inherited from CoreConfig: these fixtures describe the stock 0.4 surface, so
+        // a build pointed at the fork would otherwise fail here for reasons that have nothing to
+        // do with the wiring under test.
+        apiVariant = BarkdApiVariant.STOCK_0_4,
         engine = { barkdEngine(script) },
     )
 

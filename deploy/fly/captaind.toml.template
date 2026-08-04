@@ -7,7 +7,22 @@
 data_dir = "/data/captaind"
 network = "signet"
 
-vtxo_lifetime = 8640
+# 60,480 blocks = 21 days at mutinynet's 30s spacing (was 8640 ≈ 72 hours).
+#
+# Raised for keys-on-device: with the wallet on the phone and no background refresh, nothing
+# refreshes a VTXO while LARK is closed, so the lifetime IS the length of time a tester may ignore
+# the app before the server can sweep their money. Three days is a trap on a test network people
+# check weekly. The app's own "needs a moment" warning fires at an eighth of this (~2.6 days before
+# expiry), which is only a useful warning if the window is weeks rather than hours.
+#
+# CEILING: this field is a `BlockDelta`, i.e. **u16** (bitcoin-ext/src/lib.rs) — anything above
+# 65,535 fails to deserialize and captaind refuses to start. On a 30-second chain that caps the
+# window at ~22.75 days no matter what we want; 21 days is the round number under it. Note the
+# upstream default (6*24*30) assumes 10-minute blocks, so on mutinynet it buys 36 hours, not 30 days
+# — the block time is the whole story here.
+#
+# Reasoned through in docs/liveness-envelope.md; only newly created VTXOs get the new lifetime.
+vtxo_lifetime = 60480
 vtxo_exit_delta = 144
 
 min_board_amount = "20000 sat"

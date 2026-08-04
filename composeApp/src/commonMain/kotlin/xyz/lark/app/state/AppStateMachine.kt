@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.OnchainFunding
 import xyz.lark.app.core.format.MoneyFormat
 // Pure destination classification, kept beside the resolver and invoice parser it composes so the
 // input screen and the send path cannot disagree about what counts as payable.
@@ -33,6 +34,13 @@ private const val SCAN_NAME = "Ferry Building Coffee"
 private const val SCAN_HANDLE = "ferry@sq.link"
 private const val SCAN_SATS = 520L
 private const val HIDDEN_BALANCE = "••••"
+
+/**
+ * How long the settling screen keeps working before it stops on its own: ~5 minutes, which covers
+ * the three board confirmations mutinynet needs (~90s) plus a round, with room to spare.
+ */
+private const val BOARD_SETTLE_ATTEMPTS = 15
+private const val BOARD_SETTLE_POLL_MILLIS = 20_000L
 
 /**
  * The default reveal-countdown clock: monotonic elapsed millis since machine construction.
@@ -86,6 +94,16 @@ private data class MachineState(
     val receiveCode: String? = null,
     /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
     val pasteFailed: Boolean = false,
+    /** A board is in flight; the deposit screen says so and blocks a second attempt. */
+    val boarding: Boolean = false,
+    /** An on-chain sync is in flight, so "Check again" can show it is doing something. */
+    val checkingDeposit: Boolean = false,
+    /** The last board attempt failed. Cleared when another starts. */
+    val boardFailed: Boolean = false,
+    /** A words-restore is in flight; the restore screen says so and blocks a second attempt. */
+    val restoring: Boolean = false,
+    /** The last words-restore did not open a wallet. Cleared when another attempt starts. */
+    val restoreFailed: Boolean = false,
 )
 
 /**
@@ -106,6 +124,11 @@ class AppStateMachine(
     private val demo: DemoControls? = null,
     private val scope: CoroutineScope,
     private val nowMillis: () -> Long = monotonicNowMillis(),
+    /**
+     * On-chain funding, when the active core can do it (M2). Null for the demo and the gateway,
+     * which is what hides the deposit step rather than showing an address nothing can board.
+     */
+    private val funding: OnchainFunding? = null,
 ) {
 
     private var state = MachineState(route = restingRoute())
@@ -118,6 +141,7 @@ class AppStateMachine(
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
+    private var boardSettleJob: Job? = null
 
     init {
         // The core is the source of truth for wallet facts; a real (push-based) core emits
@@ -148,6 +172,10 @@ class AppStateMachine(
     fun back() = update {
         when {
             it.route == Route.SENDING -> it
+            // Onboarding's root is welcome, not the resting route. Since the wallet is now created
+            // partway through onboarding (goFund), consulting restingRoute() here would send
+            // someone still setting up straight to home.
+            it.stack.isEmpty() && it.route.isOnboarding -> it.copy(route = Route.WELCOME)
             it.stack.isEmpty() -> it.copy(route = restingRoute())
             else -> it.copy(route = it.stack.last(), stack = it.stack.dropLast(1))
         }
@@ -160,11 +188,74 @@ class AppStateMachine(
 
     fun goHowItWorks() = push(Route.HOW_IT_WORKS)
 
-    fun goFund() = push(Route.FUND)
+    /**
+     * Enters the funding step — and creates the wallet first, because funding needs one.
+     *
+     * With an on-device core the deposit address comes from the wallet itself, so the wallet has to
+     * exist before the fund screen can show anything; creating it only at [finishOnboarding] (which
+     * is where it used to happen, when the address came from a gateway) leaves this screen with
+     * nothing to display. Starting the open here also means its slow first sync overlaps with the
+     * user reading this screen instead of stalling the end of onboarding.
+     *
+     * Idempotent in every core, so [finishOnboarding] can still call it for the paths that skip
+     * funding entirely.
+     */
+    fun goFund() {
+        core.createWallet()
+        push(Route.FUND)
+    }
 
     fun goRestore() = push(Route.RESTORE)
 
     fun startBoarding() = push(Route.BOARDING)
+
+    /**
+     * Shows the on-chain deposit address, and checks the chain once on arrival.
+     *
+     * The check matters because a tester typically gets here, leaves for a faucet, and comes back:
+     * the on-chain wallet is only synced when something asks it to (bark's maintenance deliberately
+     * does not), so without this the screen would keep saying nothing has arrived.
+     */
+    fun goDeposit() {
+        push(Route.DEPOSIT)
+        checkForDeposit()
+    }
+
+    /** Re-reads the chain, so a deposit that has just landed shows up. */
+    fun checkForDeposit() {
+        val funding = funding ?: return
+        if (state.checkingDeposit) return
+        update { it.copy(checkingDeposit = true) }
+        scope.launch {
+            funding.syncOnchain()
+            update { it.copy(checkingDeposit = false) }
+        }
+    }
+
+    /**
+     * Boards everything confirmed, then shows the settling screen.
+     *
+     * The whole balance rather than an amount: this is onboarding money arriving from a faucet, and
+     * there is nothing useful to leave behind on-chain. It also has to be the whole balance —
+     * boarding a named amount equal to the confirmed balance cannot pay its own on-chain fee.
+     */
+    fun boardConfirmed() {
+        val sats = funding?.confirmedSats ?: 0L
+        val boardable = funding != null && !state.boarding && sats >= funding.minBoardSats
+        if (boardable) {
+            update { it.copy(boarding = true, boardFailed = false) }
+            scope.launch {
+                // Boards the whole balance: the core works out what is left after the on-chain fee,
+                // which is why this passes no amount. See OnchainFunding.boardAll.
+                val boarded = requireNotNull(funding).boardAll()
+                update { it.copy(boarding = false, boardFailed = !boarded) }
+                if (boarded) {
+                    push(Route.BOARDING)
+                    watchBoardSettle()
+                }
+            }
+        }
+    }
 
     /** Completing onboarding (settling done, or "Later" on fund) creates the wallet and lands home. */
     fun finishOnboarding() {
@@ -176,6 +267,23 @@ class AppStateMachine(
     fun finishRestore() {
         core.restoreWallet()
         go(Route.HOME)
+    }
+
+    /**
+     * Restores from a typed phrase: lands home if a wallet opened, and stays put saying so if not.
+     *
+     * Navigating on failure is the one thing this must not do — it would drop the user into an empty
+     * home screen having silently lost what they typed. The words are passed straight through to the
+     * core and never stored in machine state (see [xyz.lark.app.ui.screens.onboarding.RestoreScreen]).
+     */
+    fun finishRestore(words: List<String>) {
+        if (state.restoring) return
+        update { it.copy(restoring = true, restoreFailed = false) }
+        scope.launch {
+            val opened = core.restoreWallet(words)
+            update { it.copy(restoring = false, restoreFailed = !opened) }
+            if (opened) go(Route.HOME)
+        }
     }
 
     // --- Balance ---
@@ -380,6 +488,31 @@ class AppStateMachine(
         if (it.route == Route.SENDING) it.copy(route = route, stack = emptyList()) else it
     }
 
+    /**
+     * Drives a boarded deposit to completion while the settling screen is up.
+     *
+     * The screen tells the user "keep LARK open and it will finish here", and this is what makes
+     * that true. A board only becomes a spendable VTXO once its transaction confirms *and* the
+     * wallet registers it, and registration happens inside the engine's maintenance pass — the
+     * balance poll alone reads the database and would spin forever. Leaves for home as soon as
+     * money shows up, gives up quietly after the budget (the skip affordance still works), and
+     * stops if the user navigates away.
+     */
+    private fun watchBoardSettle() {
+        boardSettleJob?.cancel()
+        boardSettleJob = scope.launch {
+            repeat(BOARD_SETTLE_ATTEMPTS) {
+                delay(BOARD_SETTLE_POLL_MILLIS)
+                if (state.route != Route.BOARDING) return@launch
+                core.refresh()
+                if (core.balanceSats.value > 0 && state.route == Route.BOARDING) {
+                    go(Route.HOME)
+                    return@launch
+                }
+            }
+        }
+    }
+
     // --- Refresh ---
 
     /** Runs the health refresh behind the working spinner, then lands home ready. */
@@ -513,6 +646,8 @@ class AppStateMachine(
             channels = renderChannels(s, placeholder = advanced.network.lightningBridge),
             demoHealth = renderDemoHealth(),
             networkLabel = core.networkLabel,
+            restore = RestoreModel(busy = s.restoring, failed = s.restoreFailed),
+            deposit = renderDeposit(s),
         )
     }
 
@@ -668,6 +803,26 @@ class AppStateMachine(
             },
             incoming = tx.sats > 0,
         )
+
+    /**
+     * The deposit step, or null when the core cannot board — which is what removes the step from the
+     * funding screen rather than offering an address that leads nowhere.
+     */
+    private fun renderDeposit(s: MachineState): DepositModel? {
+        val funding = funding ?: return null
+        return DepositModel(
+            address = core.depositAddress,
+            copyLabel = if (s.copied) "Copied" else "Copy",
+            confirmedLabel = MoneyFormat.btc(funding.confirmedSats),
+            pendingLabel = MoneyFormat.btc(funding.pendingSats),
+            minBoardLabel = MoneyFormat.btc(funding.minBoardSats),
+            canBoard = funding.confirmedSats >= funding.minBoardSats,
+            hasPending = funding.pendingSats > 0,
+            checking = s.checkingDeposit,
+            boarding = s.boarding,
+            failed = s.boardFailed,
+        )
+    }
 
     private fun renderBackup(s: MachineState): BackupModel {
         val backedUp = core.backedUp.value

@@ -169,4 +169,40 @@ data class AppModel(
     val channels: ChannelsModel,
     val demoHealth: List<DemoHealthOption>?,
     val networkLabel: String,
+    /** Restore-from-words progress, for the restore screen. The phrase itself is never in here. */
+    val restore: RestoreModel,
+    /** On-chain deposit state; null when the active core cannot board (demo, gateway). */
+    val deposit: DepositModel?,
+)
+
+/**
+ * The on-chain deposit step: where to send money, what has arrived, and whether it can be boarded.
+ *
+ * [canBoard] is the whole point of splitting confirmed from pending — a deposit that has arrived but
+ * not confirmed, or one under the server's minimum, must read as a wait or as "not enough" rather
+ * than as a broken button.
+ */
+data class DepositModel(
+    val address: String,
+    /** "Copy" / "Copied", sharing the receive screen's 1.6s flip. */
+    val copyLabel: String,
+    val confirmedLabel: String,
+    val pendingLabel: String,
+    val minBoardLabel: String,
+    val canBoard: Boolean,
+    val hasPending: Boolean,
+    val checking: Boolean,
+    val boarding: Boolean,
+    val failed: Boolean,
+)
+
+/**
+ * What the restore screen shows about its own attempt.
+ *
+ * Notably absent: the words. They stay in the screen's local state so the app-wide model never holds
+ * a recovery phrase for the lifetime of the process.
+ */
+data class RestoreModel(
+    val busy: Boolean = false,
+    val failed: Boolean = false,
 )

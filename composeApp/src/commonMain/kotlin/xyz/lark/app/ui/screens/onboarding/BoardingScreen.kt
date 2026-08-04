@@ -26,7 +26,12 @@ private val SubCopyTopGap = 10.dp
 private val SubCopyMaxWidth = 270.dp
 private val SkipButtonHeight = 52.dp
 
-private const val SUB_COPY = "About 10 minutes. You can close LARK — it finishes without you."
+/**
+ * Was "You can close LARK — it finishes without you", which is not true with keys on device: nothing
+ * runs while the app is closed, so a board finishes when LARK is next open. Saying otherwise would
+ * teach a tester to close the app at exactly the wrong moment.
+ */
+private const val SUB_COPY = "A few minutes, and a few confirmations. Keep LARK open and it will finish here."
 
 /**
  * First deposit settling (spec block `data-screen-label="Onboarding — first deposit settling"`):
@@ -69,7 +74,7 @@ fun BoardingScreen(
             )
         }
         OutlinePillButton(
-            text = "Skip ahead (demo)",
+            text = "Go to my wallet",
             onClick = onSkip,
             height = SkipButtonHeight,
             modifier = Modifier

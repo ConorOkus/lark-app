@@ -38,6 +38,9 @@ jobs:
         run: bash scripts/clone-forks.sh
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The iOS app links the crate, so the app build needs a simulator slice of it.
+          targets: aarch64-apple-ios-sim
 
       # Keyed on the pins: a fork bump invalidates the cache, an unrelated change reuses it.
       # The bark + LDK debug build is the dominant cost of this job.
