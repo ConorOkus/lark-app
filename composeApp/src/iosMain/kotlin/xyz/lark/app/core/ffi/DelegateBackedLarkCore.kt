@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.format.blockExpiryLabel
 import xyz.lark.app.core.OnchainFunding
 import xyz.lark.app.core.gateway.arkReceiveUri
 import xyz.lark.app.core.model.AdvancedStats
@@ -55,6 +56,23 @@ private val DEFAULT_POLL_INTERVAL = 15.seconds
 private const val MAINTENANCE_EVERY_N_CYCLES = 4
 
 /**
+ * The in-process core's tunable knobs, grouped like `GatewayTuning` so the constructor stays short
+ * and tests can vary timing without touching the rest.
+ *
+ * [secondsPerBlock] exists only to turn an expiry height into human time. It defaults to mutinynet's
+ * 30 seconds; computing a countdown with the wrong spacing is off by the ratio between them, which
+ * against Bitcoin's 10-minute target is 20x — the difference between a useful expiry warning and a
+ * dangerously reassuring one.
+ */
+data class FfiTuning(
+    val pollInterval: Duration = DEFAULT_POLL_INTERVAL,
+    val secondsPerBlock: Int = MUTINYNET_SECONDS_PER_BLOCK,
+)
+
+/** mutinynet targets 30-second blocks; see [FfiTuning.secondsPerBlock]. */
+private const val MUTINYNET_SECONDS_PER_BLOCK = 30
+
+/**
  * The seam over the in-process Rust core, reached through a platform [LarkCoreDelegate] (M2 U3).
  *
  * Three problems this solves, none of them business logic:
@@ -76,7 +94,7 @@ class DelegateBackedLarkCore(
     private val scope: CoroutineScope,
     private val config: FfiWalletConfig,
     override val networkLabel: String,
-    private val pollInterval: Duration = DEFAULT_POLL_INTERVAL,
+    private val tuning: FfiTuning = FfiTuning(),
 ) : LarkCore, OnchainFunding {
 
     /** Seeded from disk, not from the open: see the class comment's point 3. */
@@ -114,6 +132,16 @@ class DelegateBackedLarkCore(
     private var receiveCodeCache: String? = null
     private var depositAddressCache: String? = null
     private var onchain: FfiOnchainBalance? = null
+    private var vtxos: FfiVtxoSummary? = null
+
+    /**
+     * Last known chain tip, refreshed on the maintenance cadence rather than every poll.
+     *
+     * Reading it is an uncached HTTP request, and its only consumer is a countdown measured in days
+     * — so fetching it four times a minute on a phone would be pure waste. Held across cycles so a
+     * failed read leaves the previous value standing instead of blanking the countdown.
+     */
+    private var tipHeight: Long? = null
 
     override val walletExists: StateFlow<Boolean> = walletExistsFlow.asStateFlow()
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
@@ -240,7 +268,7 @@ class DelegateBackedLarkCore(
                 pollOnce()
             }
             // Waits out the interval, but a triggered poll cuts the wait short.
-            withTimeoutOrNull(pollInterval) { pollTrigger.receive() }
+            withTimeoutOrNull(tuning.pollInterval) { pollTrigger.receive() }
         }
     }
 
@@ -252,6 +280,9 @@ class DelegateBackedLarkCore(
     private suspend fun runMaintenance() {
         delegate.awaitDone { onDone -> refresh(onDone) }
         delegate.awaitDone { onDone -> onchainSync(onDone) }
+        // The network half of the expiry countdown, on the slow cadence. A failure keeps the last
+        // known tip rather than clearing it: a slightly stale countdown beats no countdown.
+        delegate.awaitValue<Long> { onResult -> chainTip(onResult) }?.let { tipHeight = it }
     }
 
     private suspend fun pollOnce() = pollMutex.withLock {
@@ -279,24 +310,33 @@ class DelegateBackedLarkCore(
                 ?.let { address -> arkReceiveUri(address) }
         }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
+        // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
+        // expiry deadline visible at all, and it costs nothing to keep current.
+        vtxos = delegate.awaitValue { onResult -> vtxoSummary(onResult) }
     }
 
     override fun advancedStats(): AdvancedStats = AdvancedStats(
         funds = FundsStats(
-            // The crate exposes no VTXO listing yet, so the count and expiry are honestly unknown
-            // rather than invented; the balance and the reserve are real.
-            vtxoCount = 0,
-            vtxoTotalSats = balanceFlow.value,
-            soonestExpiry = PLACEHOLDER,
+            // Null, not zero, until the first summary arrives: "0 VTXOs" alongside a real balance is
+            // a contradiction, and a count is exactly the sort of unknown that must read as one.
+            vtxoCount = vtxos?.count,
+            // The VTXO row's own total, so count and amount come from one read and agree.
+            vtxoTotalSats = vtxos?.totalSat ?: balanceFlow.value,
+            soonestExpiry = blockExpiryLabel(
+                expiryHeight = vtxos?.soonestExpiryHeight,
+                tipHeight = tipHeight ?: 0L,
+                secondsPerBlock = tuning.secondsPerBlock,
+            ),
+            // The engine records no refresh timestamp, so this one stays honestly unknown.
             lastRefresh = PLACEHOLDER,
-            onChainReserveSats = onchain?.confirmedSat ?: 0L,
+            onChainReserveSats = onchain?.confirmedSat,
             depositAddress = depositAddress,
         ),
         network = NetworkStats(
             arkServerStatus = healthFlow.value.display.aspStatus,
             nextRound = PLACEHOLDER,
             lightningBridge = PLACEHOLDER,
-            chainTip = 0L,
+            chainTip = tipHeight?.takeIf { it > 0 },
         ),
     )
 
@@ -337,6 +377,9 @@ class DelegateBackedLarkCore(
         if (!walletOpen) return
         delegate.awaitDone { onDone -> onchainSync(onDone) }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
+        // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
+        // expiry deadline visible at all, and it costs nothing to keep current.
+        vtxos = delegate.awaitValue { onResult -> vtxoSummary(onResult) }
     }
 }
 

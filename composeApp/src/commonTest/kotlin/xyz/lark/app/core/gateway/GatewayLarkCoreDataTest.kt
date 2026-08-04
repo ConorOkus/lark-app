@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import xyz.lark.app.core.model.HealthState
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -132,7 +133,7 @@ class GatewayLarkCoreDataTest {
         assertEquals(103_087L, stats.funds.vtxoTotalSats)
         assertEquals("block 929,174 · in 90 days", stats.funds.soonestExpiry)
         assertEquals("—", stats.funds.lastRefresh, "not exposed by barkd 0.4.0")
-        assertEquals(0L, stats.funds.onChainReserveSats, "not exposed; zero, never a fake number")
+        assertNull(stats.funds.onChainReserveSats, "not exposed by this surface: unknown, not zero")
         assertEquals("bc1qf7demo", stats.funds.depositAddress)
         assertEquals("Connected", stats.network.arkServerStatus)
         assertEquals("—", stats.network.nextRound)

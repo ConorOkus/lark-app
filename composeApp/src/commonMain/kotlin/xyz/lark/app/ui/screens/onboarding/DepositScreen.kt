@@ -5,12 +5,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,9 +40,14 @@ private val QrCardPadding = 18.dp
 private val QrSize = 200.dp
 private val AddressTopGap = 18.dp
 private val AddressPadding = 16.dp
-private val StatusTopGap = 16.dp
+
+/** Gaps inside the pinned bottom block: content -> status -> buttons. */
+private val StatusTopGap = 20.dp
+private val StatusBottomGap = 14.dp
 private val CtaGap = 10.dp
-private val CtaHeight = 52.dp
+
+/** 56dp to match the Get paid screen's pills, which this screen is styled from. */
+private val CtaHeight = 56.dp
 
 /**
  * The on-chain deposit step: an address to send to, what has arrived, and a board CTA.
@@ -69,26 +75,39 @@ fun DepositScreen(
             ),
     ) {
         ScreenBackButton(onBack = actions.onBack)
-        Text(
-            text = "Send bitcoin here.",
-            style = LarkTheme.typography.screenTitle,
-            color = LarkColors.TextPrimary,
-            modifier = Modifier.padding(top = TitleTopPadding, bottom = TitleBottomPadding),
-        )
-        Text(
-            text = "An on-chain deposit of at least ${deposit.minBoardLabel}. " +
-                "It needs a few confirmations before LARK can move it in.",
-            style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 24.sp),
-            color = LarkColors.TextSecondary,
-        )
-        DepositAddress(address = deposit.address)
+        // Scrolls rather than squeezes. This screen carries more than the Get paid screen it is
+        // styled from — a three-line explainer, a QR, and a two-line address — so on a shorter or
+        // denser phone the content exceeds the viewport. A weighted Spacer collapses to zero there,
+        // which is what pushed the status line up against the buttons; a scroll region cannot.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Send bitcoin here.",
+                style = LarkTheme.typography.screenTitle,
+                color = LarkColors.TextPrimary,
+                modifier = Modifier.padding(top = TitleTopPadding, bottom = TitleBottomPadding),
+            )
+            Text(
+                text = "An on-chain deposit of at least ${deposit.minBoardLabel}. " +
+                    "It needs a few confirmations before LARK can move it in.",
+                style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 24.sp),
+                color = LarkColors.TextSecondary,
+            )
+            DepositAddress(address = deposit.address)
+        }
+        // The status line stays pinned with the buttons, never scrolling away from them: it is the
+        // reason "Move it in" is enabled or disabled, and a disabled button with its explanation
+        // scrolled off screen reads as broken.
         Text(
             text = statusLine(deposit),
-            style = LarkTheme.typography.body.copy(fontSize = 14.sp),
+            style = LarkTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 20.sp),
             color = LarkColors.TextSecondary,
-            modifier = Modifier.padding(top = StatusTopGap),
+            modifier = Modifier.padding(top = StatusTopGap, bottom = StatusBottomGap),
         )
-        Spacer(modifier = Modifier.weight(1f))
         DepositCtas(deposit = deposit, actions = actions)
     }
 }

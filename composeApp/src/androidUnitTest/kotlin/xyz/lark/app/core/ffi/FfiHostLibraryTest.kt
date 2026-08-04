@@ -6,6 +6,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -208,6 +209,51 @@ class FfiHostLibraryTest {
                     listOf(ESPLORA_RECENT_BLOCKS_PATH),
                     esplora.unknownPathsRequested,
                     "the endpoint an onchain sync adds beyond wallet creation's three",
+                )
+            }
+        }
+    }
+
+    /**
+     * The VTXO summary is a local read; the chain tip is not. Proven by taking the chain source away.
+     *
+     * These two feed one line of UI — the expiry countdown that is a user's only sight of the
+     * deadline past which the server may sweep their funds — but they have opposite failure
+     * profiles, and they used to be one call. That meant a single failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time. Killing the stub mid-test is the cheapest honest
+     * proof that the split holds: the summary keeps answering, and only the tip goes dark.
+     *
+     * `soonestExpiryHeight` being null rather than 0 is the other load-bearing assertion: a zero
+     * height renders as "expired" against any real tip, the exact opposite of "nothing to expire".
+     */
+    @Test
+    fun theVtxoSummaryIsLocalWhileTheChainTipIsNot() = runBlocking {
+        requireHostLibrary()
+        val esplora = StubEsplora.start()
+        withDatadir { datadir ->
+            uniffi.lark_ffi.openWallet(
+                datadir = datadir.absolutePath,
+                network = "signet",
+                arkServer = UNREACHABLE_ARK_SERVER,
+                esplora = esplora.baseUrl,
+                words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT),
+            ).use { wallet ->
+                // With the chain source up, the tip is whatever it served — proving the value is
+                // read from the chain rather than fabricated locally.
+                assertEquals(StubEsplora.TIP_HEIGHT.toUInt(), wallet.chainTip())
+
+                esplora.close()
+
+                val summary = wallet.vtxoSummary()
+                assertEquals(0u, summary.count, "a fresh wallet owns no VTXOs")
+                assertEquals(0uL, summary.totalSat, "and so holds nothing in them")
+                assertNull(
+                    summary.soonestExpiryHeight,
+                    "no VTXOs means no deadline — which is not a deadline of zero",
+                )
+                assertTrue(
+                    runCatching { wallet.chainTip() }.isFailure,
+                    "the tip is a network read and must fail honestly once the chain source is gone",
                 )
             }
         }

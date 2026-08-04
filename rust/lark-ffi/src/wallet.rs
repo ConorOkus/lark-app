@@ -162,6 +162,38 @@ impl LarkWallet {
         Ok(())
     }
 
+    /// The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+    ///
+    /// **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+    /// cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+    /// fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+    /// that was sitting in sqlite the whole time.
+    ///
+    /// Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+    /// tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+    /// crate does not.
+    ///
+    /// `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+    /// height, which would read as "already expired".
+    pub async fn vtxo_summary(&self) -> Result<VtxoSummary, LarkError> {
+        let vtxos = self.inner.spendable_vtxos().await.map_err(LarkError::from)?;
+        Ok(VtxoSummary {
+            count: vtxos.len() as u32,
+            total_sat: vtxos.iter().map(|v| v.vtxo.amount().to_sat()).sum(),
+            soonest_expiry_height: vtxos.iter().map(|v| v.vtxo.expiry_height()).min(),
+        })
+    }
+
+    /// The chain tip, read from the chain source.
+    ///
+    /// Its own export because it is the *network* half of an expiry countdown and has a completely
+    /// different cost profile from the local half: this is an uncached HTTP request every time, so a
+    /// caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+    /// minute stale costs nothing against a countdown measured in days.
+    pub async fn chain_tip(&self) -> Result<u32, LarkError> {
+        self.inner.chain.tip().await.map_err(LarkError::from)
+    }
+
     /// The on-chain balance, split by confirmation state. Read-only — call
     /// [`Self::onchain_sync`] first for a current answer.
     ///
@@ -291,6 +323,18 @@ fn destination_label(method: &PaymentMethod) -> String {
         PaymentMethod::LightningAddress(address) => address.to_string(),
         PaymentMethod::Custom(raw) => raw.clone(),
     }
+}
+
+/// A summary of the wallet's spendable VTXOs.
+///
+/// Heights rather than dates, deliberately: a VTXO expires at a block height, and converting that
+/// to wall-clock time needs both the chain tip and the network's block spacing. The tip is a
+/// separate export ([`LarkWallet::chain_tip`]) precisely so this one stays local and cheap.
+#[derive(uniffi::Record)]
+pub struct VtxoSummary {
+    pub count: u32,
+    pub total_sat: u64,
+    pub soonest_expiry_height: Option<u32>,
 }
 
 /// The on-chain wallet's balance, split by confirmation state.

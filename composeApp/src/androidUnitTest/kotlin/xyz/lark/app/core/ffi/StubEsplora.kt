@@ -36,8 +36,12 @@ internal class StubEsplora private constructor(
          */
         const val SIGNET_GENESIS_HASH = "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6"
 
-        /** Any plausible height; nothing in the contract lane asserts on it. */
-        private const val TIP_HEIGHT = "2100000"
+        /**
+         * The height this stub reports as the chain tip. Internal because a test asserting that a
+         * wallet's reported tip equals *this* value is what proves the tip came from the chain
+         * source rather than being fabricated locally.
+         */
+        internal const val TIP_HEIGHT = 2_100_000L
 
         /** sat/vB by target confirmation count, in esplora's shape. */
         private const val FEE_ESTIMATES = """{"1":2.0,"2":2.0,"3":1.5,"6":1.0,"144":1.0,"1008":1.0}"""
@@ -48,7 +52,7 @@ internal class StubEsplora private constructor(
             server.createContext("/") { exchange ->
                 when (val path = exchange.requestURI.path) {
                     "/block-height/0" -> exchange.respond(SIGNET_GENESIS_HASH)
-                    "/blocks/tip/height" -> exchange.respond(TIP_HEIGHT)
+                    "/blocks/tip/height" -> exchange.respond(TIP_HEIGHT.toString())
                     "/fee-estimates" -> exchange.respond(FEE_ESTIMATES)
                     else -> {
                         unknownPaths += path

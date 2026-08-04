@@ -551,6 +551,16 @@ public protocol LarkWalletProtocol : AnyObject {
     func boardAll() async throws  -> String
     
     /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+    func chainTip() async throws  -> UInt32
+    
+    /**
      * Decrypt a state blob, returning `(plaintext, version)`. The header
      * (version + fingerprint) is bound as AEAD AAD, so a relabelled blob fails.
      */
@@ -641,6 +651,23 @@ public protocol LarkWalletProtocol : AnyObject {
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
      */
     func sendBolt11(invoice: String, sats: UInt64) async throws  -> String
+    
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+    func vtxoSummary() async throws  -> VtxoSummary
     
 }
 
@@ -761,6 +788,31 @@ open func boardAll()async throws  -> String {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+open func chainTip()async throws  -> UInt32 {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_chain_tip(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u32,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u32,
+            freeFunc: ffi_lark_ffi_rust_future_free_u32,
+            liftFunc: FfiConverterUInt32.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -996,6 +1048,38 @@ open func sendBolt11(invoice: String, sats: UInt64)async throws  -> String {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+open func vtxoSummary()async throws  -> VtxoSummary {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_vtxo_summary(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeVtxoSummary.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -1327,6 +1411,87 @@ public func FfiConverterTypeStateBlobPlaintext_lower(_ value: StateBlobPlaintext
 
 
 /**
+ * A summary of the wallet's spendable VTXOs.
+ *
+ * Heights rather than dates, deliberately: a VTXO expires at a block height, and converting that
+ * to wall-clock time needs both the chain tip and the network's block spacing. The tip is a
+ * separate export ([`LarkWallet::chain_tip`]) precisely so this one stays local and cheap.
+ */
+public struct VtxoSummary {
+    public var count: UInt32
+    public var totalSat: UInt64
+    public var soonestExpiryHeight: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(count: UInt32, totalSat: UInt64, soonestExpiryHeight: UInt32?) {
+        self.count = count
+        self.totalSat = totalSat
+        self.soonestExpiryHeight = soonestExpiryHeight
+    }
+}
+
+
+
+extension VtxoSummary: Equatable, Hashable {
+    public static func ==(lhs: VtxoSummary, rhs: VtxoSummary) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        if lhs.totalSat != rhs.totalSat {
+            return false
+        }
+        if lhs.soonestExpiryHeight != rhs.soonestExpiryHeight {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(count)
+        hasher.combine(totalSat)
+        hasher.combine(soonestExpiryHeight)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVtxoSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VtxoSummary {
+        return
+            try VtxoSummary(
+                count: FfiConverterUInt32.read(from: &buf), 
+                totalSat: FfiConverterUInt64.read(from: &buf), 
+                soonestExpiryHeight: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VtxoSummary, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.count, into: &buf)
+        FfiConverterUInt64.write(value.totalSat, into: &buf)
+        FfiConverterOptionUInt32.write(value.soonestExpiryHeight, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVtxoSummary_lift(_ buf: RustBuffer) throws -> VtxoSummary {
+    return try FfiConverterTypeVtxoSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVtxoSummary_lower(_ value: VtxoSummary) -> RustBuffer {
+    return FfiConverterTypeVtxoSummary.lower(value)
+}
+
+
+/**
  * Top-level FFI error. Coarse by design — the seam maps these to health/errors,
  * and the backup variant never distinguishes wrong-passphrase from tampering.
  */
@@ -1489,6 +1654,30 @@ public func FfiConverterTypeMovementState_lower(_ value: MovementState) -> RustB
 extension MovementState: Equatable, Hashable {}
 
 
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1775,6 +1964,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_board_all() != 3671) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_chain_tip() != 8695) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob() != 36113) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1809,6 +2001,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11() != 45122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary() != 35839) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -765,6 +765,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -794,6 +798,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_board_all(`ptr`: Pointer,
     ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_chain_tip(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_decrypt_state_blob(`ptr`: Pointer,`blob`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_lark_ffi_fn_method_larkwallet_deposit_address(`ptr`: Pointer,
@@ -817,6 +823,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_send_ark(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_send_bolt11(`ptr`: Pointer,`invoice`: RustBuffer.ByValue,`sats`: Long,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_vtxo_summary(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_func_async_probe_no_runtime(`value`: Int,
     ): Long
@@ -964,6 +972,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_board_all(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_chain_tip(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_deposit_address(
@@ -987,6 +997,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_ark(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary(
     ): Short
     fun ffi_lark_ffi_uniffi_contract_version(
     ): Int
@@ -1035,6 +1047,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_board_all() != 3671.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_chain_tip() != 8695.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob() != 36113.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1069,6 +1084,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11() != 45122.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary() != 35839.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1517,6 +1535,16 @@ public interface LarkWalletInterface {
     suspend fun `boardAll`(): kotlin.String
     
     /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+    suspend fun `chainTip`(): kotlin.UInt
+    
+    /**
      * Decrypt a state blob, returning `(plaintext, version)`. The header
      * (version + fingerprint) is bound as AEAD AAD, so a relabelled blob fails.
      */
@@ -1607,6 +1635,23 @@ public interface LarkWalletInterface {
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
      */
     suspend fun `sendBolt11`(`invoice`: kotlin.String, `sats`: kotlin.ULong): kotlin.String
+    
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+    suspend fun `vtxoSummary`(): VtxoSummary
     
     companion object
 }
@@ -1770,6 +1815,35 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
         { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterString.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `chainTip`() : kotlin.UInt {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_chain_tip(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u32(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u32(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u32(future) },
+        // lift function
+        { FfiConverterUInt.lift(it) },
         // Error FFI converter
         LarkException.ErrorHandler,
     )
@@ -2065,6 +2139,42 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
     }
 
     
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `vtxoSummary`() : VtxoSummary {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_vtxo_summary(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeVtxoSummary.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
 
     
     
@@ -2243,6 +2353,49 @@ public object FfiConverterTypeStateBlobPlaintext: FfiConverterRustBuffer<StateBl
 
 
 
+/**
+ * A summary of the wallet's spendable VTXOs.
+ *
+ * Heights rather than dates, deliberately: a VTXO expires at a block height, and converting that
+ * to wall-clock time needs both the chain tip and the network's block spacing. The tip is a
+ * separate export ([`LarkWallet::chain_tip`]) precisely so this one stays local and cheap.
+ */
+data class VtxoSummary (
+    var `count`: kotlin.UInt, 
+    var `totalSat`: kotlin.ULong, 
+    var `soonestExpiryHeight`: kotlin.UInt?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVtxoSummary: FfiConverterRustBuffer<VtxoSummary> {
+    override fun read(buf: ByteBuffer): VtxoSummary {
+        return VtxoSummary(
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VtxoSummary) = (
+            FfiConverterUInt.allocationSize(value.`count`) +
+            FfiConverterULong.allocationSize(value.`totalSat`) +
+            FfiConverterOptionalUInt.allocationSize(value.`soonestExpiryHeight`)
+    )
+
+    override fun write(value: VtxoSummary, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`count`, buf)
+            FfiConverterULong.write(value.`totalSat`, buf)
+            FfiConverterOptionalUInt.write(value.`soonestExpiryHeight`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -2385,6 +2538,38 @@ public object FfiConverterTypeMovementState: FfiConverterRustBuffer<MovementStat
 }
 
 
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
 
 
 
