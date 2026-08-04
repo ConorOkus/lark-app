@@ -57,7 +57,7 @@ Sanity numbers for a good build: ~62 MB `.app`, `arm64` only, `CFBundleIcons` pr
   confirmations (~90s), then "Move it in". The screen distinguishes "arrived" from "confirmed", so a
   disabled button always has a stated reason.
 - **Open it at least every few weeks.** Nothing refreshes while the app is closed. The safe bound is
-  ~25 days and the app warns ~3.75 days ahead — see [liveness-envelope.md](../liveness-envelope.md).
+  ~18 days and the app warns ~2.6 days ahead — see [liveness-envelope.md](../liveness-envelope.md).
 
 ## Known gaps in this build
 
