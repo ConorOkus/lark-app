@@ -757,6 +757,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -797,6 +801,10 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_mint_address(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_movements(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_refresh(`ptr`: Pointer,
     ): Long
@@ -960,6 +968,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_movements(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_refresh(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11(
@@ -1026,7 +1038,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_mint_address() != 18162.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_movements() != 31055.toShort()) {
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync() != 57231.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947.toShort()) {
@@ -1509,8 +1527,36 @@ public interface LarkWalletInterface {
     
     /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
+     *
+     * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
+     * and creation time as well as the amounts: an activity row has to say who and when, and a
+     * caller cannot invent either. `intended_balance_sat` is here because a movement that has
+     * not completed has no meaningful effective balance yet — the row shows what was intended
+     * until it settles, which is what the gateway core does with the same distinction.
      */
     suspend fun `movements`(): List<MovementInfo>
+    
+    /**
+     * The on-chain balance, split by confirmation state. Read-only — call
+     * [`Self::onchain_sync`] first for a current answer.
+     *
+     * Split rather than a single total because the two numbers mean different things to the
+     * caller: a faucet payment shows up in `pending_sat` immediately but cannot be boarded
+     * until it confirms, so "your sats arrived, waiting on confirmations" and "you can board
+     * now" are different states and the UI has to be able to tell them apart.
+     */
+    suspend fun `onchainBalance`(): OnchainBalanceInfo
+    
+    /**
+     * Bring the on-chain (bdk) wallet up to date with the chain source.
+     *
+     * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
+     * wallet and explicitly does not touch the bdk one, so a deposit sent to
+     * [`Self::deposit_address`] stays invisible until this runs. This is an incremental sync
+     * (`ChainSync`), not `initial_wallet_scan` — a full rescan costs a gap-limit sweep of the
+     * descriptor and is only needed when adopting an already-used seed.
+     */
+    suspend fun `onchainSync`()
     
     /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
@@ -1783,6 +1829,12 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
     
     /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
+     *
+     * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
+     * and creation time as well as the amounts: an activity row has to say who and when, and a
+     * caller cannot invent either. `intended_balance_sat` is here because a movement that has
+     * not completed has no meaningful effective balance yet — the row shows what was intended
+     * until it settles, which is what the gateway core does with the same distinction.
      */
     @Throws(LarkException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -1799,6 +1851,67 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
         { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterSequenceTypeMovementInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * The on-chain balance, split by confirmation state. Read-only — call
+     * [`Self::onchain_sync`] first for a current answer.
+     *
+     * Split rather than a single total because the two numbers mean different things to the
+     * caller: a faucet payment shows up in `pending_sat` immediately but cannot be boarded
+     * until it confirms, so "your sats arrived, waiting on confirmations" and "you can board
+     * now" are different states and the UI has to be able to tell them apart.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `onchainBalance`() : OnchainBalanceInfo {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeOnchainBalanceInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Bring the on-chain (bdk) wallet up to date with the chain source.
+     *
+     * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
+     * wallet and explicitly does not touch the bdk one, so a deposit sent to
+     * [`Self::deposit_address`] stays invisible until this runs. This is an incremental sync
+     * (`ChainSync`), not `initial_wallet_scan` — a full rescan costs a gap-limit sweep of the
+     * descriptor and is only needed when adopting an already-used seed.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `onchainSync`() {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
         // Error FFI converter
         LarkException.ErrorHandler,
     )
@@ -1895,12 +2008,20 @@ public object FfiConverterTypeLarkWallet: FfiConverter<LarkWallet, Pointer> {
 
 /**
  * A slim view of a bark `Movement` for the seam's activity list.
+ *
+ * Signed balances: negative is outbound, positive inbound. Destination strings are whatever the
+ * movement recorded (an Ark address, an on-chain address, a BOLT11 invoice), left unparsed —
+ * deciding what to *show* for one is a presentation concern.
  */
 data class MovementInfo (
     var `id`: kotlin.UInt, 
     var `status`: kotlin.String, 
     var `effectiveBalanceSat`: kotlin.Long, 
-    var `offchainFeeSat`: kotlin.ULong
+    var `intendedBalanceSat`: kotlin.Long, 
+    var `offchainFeeSat`: kotlin.ULong, 
+    var `sentTo`: List<kotlin.String>, 
+    var `receivedOn`: List<kotlin.String>, 
+    var `createdAtEpochSeconds`: kotlin.Long
 ) {
     
     companion object
@@ -1915,7 +2036,11 @@ public object FfiConverterTypeMovementInfo: FfiConverterRustBuffer<MovementInfo>
             FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
             FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterLong.read(buf),
         )
     }
 
@@ -1923,14 +2048,65 @@ public object FfiConverterTypeMovementInfo: FfiConverterRustBuffer<MovementInfo>
             FfiConverterUInt.allocationSize(value.`id`) +
             FfiConverterString.allocationSize(value.`status`) +
             FfiConverterLong.allocationSize(value.`effectiveBalanceSat`) +
-            FfiConverterULong.allocationSize(value.`offchainFeeSat`)
+            FfiConverterLong.allocationSize(value.`intendedBalanceSat`) +
+            FfiConverterULong.allocationSize(value.`offchainFeeSat`) +
+            FfiConverterSequenceString.allocationSize(value.`sentTo`) +
+            FfiConverterSequenceString.allocationSize(value.`receivedOn`) +
+            FfiConverterLong.allocationSize(value.`createdAtEpochSeconds`)
     )
 
     override fun write(value: MovementInfo, buf: ByteBuffer) {
             FfiConverterUInt.write(value.`id`, buf)
             FfiConverterString.write(value.`status`, buf)
             FfiConverterLong.write(value.`effectiveBalanceSat`, buf)
+            FfiConverterLong.write(value.`intendedBalanceSat`, buf)
             FfiConverterULong.write(value.`offchainFeeSat`, buf)
+            FfiConverterSequenceString.write(value.`sentTo`, buf)
+            FfiConverterSequenceString.write(value.`receivedOn`, buf)
+            FfiConverterLong.write(value.`createdAtEpochSeconds`, buf)
+    }
+}
+
+
+
+/**
+ * The on-chain wallet's balance, split by confirmation state.
+ *
+ * `confirmed_sat` is what boarding can actually consume; `pending_sat` is what has been seen
+ * but is not yet spendable. `total_sat` is their sum, kept explicit so callers that only want
+ * "did anything arrive" do not have to add.
+ */
+data class OnchainBalanceInfo (
+    var `confirmedSat`: kotlin.ULong, 
+    var `pendingSat`: kotlin.ULong, 
+    var `totalSat`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeOnchainBalanceInfo: FfiConverterRustBuffer<OnchainBalanceInfo> {
+    override fun read(buf: ByteBuffer): OnchainBalanceInfo {
+        return OnchainBalanceInfo(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OnchainBalanceInfo) = (
+            FfiConverterULong.allocationSize(value.`confirmedSat`) +
+            FfiConverterULong.allocationSize(value.`pendingSat`) +
+            FfiConverterULong.allocationSize(value.`totalSat`)
+    )
+
+    override fun write(value: OnchainBalanceInfo, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`confirmedSat`, buf)
+            FfiConverterULong.write(value.`pendingSat`, buf)
+            FfiConverterULong.write(value.`totalSat`, buf)
     }
 }
 

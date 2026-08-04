@@ -11,6 +11,14 @@ enum class Route(val screenLabel: String) {
     WELCOME("Onboarding 1 — welcome"),
     HOW_IT_WORKS("Onboarding 2 — three promises"),
     FUND("Onboarding 3 — add money"),
+    /**
+     * The on-chain deposit address, shown so a tester can fund their own wallet.
+     *
+     * Not in the design spec, which has no on-chain deposit screen: with keys on device the money
+     * has to arrive somewhere the user can see, and leaving the address in Advanced only would make
+     * self-funding a scavenger hunt.
+     */
+    DEPOSIT("Add money — on-chain deposit"),
     BOARDING("First deposit settling"),
     RESTORE("Restore"),
     HOME("Home"),
@@ -32,4 +40,25 @@ enum class Route(val screenLabel: String) {
     HEALTH("Wallet status"),
     ADVANCED("Advanced"),
     EXIT("Move on-chain"),
+    ;
+
+    /**
+     * Whether this route is part of getting set up.
+     *
+     * Needed because "a wallet exists" stopped meaning "onboarding is done": the on-device core
+     * has to create the wallet before the funding step can show a deposit address, so back-ing out
+     * of onboarding must land on welcome rather than on the resting route it would otherwise
+     * compute (see [AppStateMachine.back]).
+     */
+    val isOnboarding: Boolean
+        get() = this in ONBOARDING_ROUTES
 }
+
+private val ONBOARDING_ROUTES = setOf(
+    Route.WELCOME,
+    Route.HOW_IT_WORKS,
+    Route.FUND,
+    Route.DEPOSIT,
+    Route.BOARDING,
+    Route.RESTORE,
+)

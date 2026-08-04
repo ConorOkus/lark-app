@@ -1,5 +1,7 @@
 package xyz.lark.app.core.gateway
 
+import xyz.lark.app.core.format.displayName
+
 /**
  * What the app can tell about a destination the user pasted or typed, before any send happens.
  *

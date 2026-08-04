@@ -9,6 +9,13 @@ targets:
     platform: iOS
     sources:
       - iosApp
+    # The Rust core (M2 U3). A *static* library XCFramework, so it links into the app
+    # binary and must not be embedded — there is no dylib to copy. Built out of tree by
+    # scripts/build-xcframework.sh (not on the per-PR gate, KTD-9); the generated Swift
+    # glue beside it in iosApp/Generated is committed, like the Kotlin bindings are.
+    dependencies:
+      - framework: Frameworks/lark_ffiFFI.xcframework
+        embed: false
     # Compose Multiplatform's PlistSanityCheck aborts at runtime unless this key
     # is a literal Info.plist entry (no INFOPLIST_KEY_* build setting exists for it).
     info:

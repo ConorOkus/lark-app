@@ -6,6 +6,11 @@
 package xyz.lark.app.core.gateway
 
 import xyz.lark.app.core.format.MoneyFormat
+import xyz.lark.app.core.format.abbreviated
+import xyz.lark.app.core.format.counted
+import xyz.lark.app.core.format.displayName
+import xyz.lark.app.core.format.initialOf
+import xyz.lark.app.core.format.relativeTimeLabel
 import xyz.lark.app.core.model.ChannelDisplay
 import xyz.lark.app.core.model.ChannelState
 import xyz.lark.app.core.model.ChannelsSnapshot
@@ -36,27 +41,11 @@ private const val LIGHTNING_PARAM = "lightning"
 private val ACTIVITY_STATUSES = setOf("pending", "successful")
 private const val STATUS_SUCCESSFUL = "successful"
 
-private const val MAX_PLAIN_NAME_LENGTH = 16
-private const val NAME_PREFIX_LENGTH = 8
-private const val NAME_SUFFIX_LENGTH = 4
-private const val ELLIPSIS = "…"
 
 /** Mirrors the demo's three recent-payee rows (send screen shows a short list, not a directory). */
 private const val RECENTS_LIMIT = 3
 
-private const val JUST_NOW_MINUTES = 2
-private const val MINUTES_PER_HOUR = 60
-private const val HOURS_PER_DAY = 24
-private const val YESTERDAY_HOURS = 48
-private const val DAYS_PER_WEEK = 7
-private const val LAST_WEEK_DAYS = 14
 
-private val JUST_NOW_LIMIT = JUST_NOW_MINUTES.minutes
-private val MINUTES_LIMIT = MINUTES_PER_HOUR.minutes
-private val HOURS_LIMIT = HOURS_PER_DAY.hours
-private val YESTERDAY_LIMIT = YESTERDAY_HOURS.hours
-private val DAYS_LIMIT = DAYS_PER_WEEK.days
-private val LAST_WEEK_LIMIT = LAST_WEEK_DAYS.days
 
 // 10-minute blocks: the same back-of-envelope maths the design's expiry copy assumes.
 private const val BLOCKS_PER_DAY = 144L
@@ -241,32 +230,8 @@ private fun expiryCountdown(blocks: Long): String = when {
  */
 internal fun relativeTimeLabel(createdAt: String, now: Instant): String {
     val instant = parsedTime(createdAt) ?: return PLACEHOLDER
-    val age = now - instant
-    return when {
-        age < JUST_NOW_LIMIT -> "Just now"
-        age < MINUTES_LIMIT -> counted(age.inWholeMinutes, "minute") + " ago"
-        age < HOURS_LIMIT -> counted(age.inWholeHours, "hour") + " ago"
-        age < YESTERDAY_LIMIT -> "Yesterday"
-        age < DAYS_LIMIT -> counted(age.inWholeDays, "day") + " ago"
-        age < LAST_WEEK_LIMIT -> "Last week"
-        else -> counted(age.inWholeDays / DAYS_PER_WEEK, "week") + " ago"
-    }
+    return relativeTimeLabel(instant, now)
 }
 
 private fun parsedTime(rfc3339: String): Instant? = runCatching { Instant.parse(rfc3339) }.getOrNull()
-
-private fun counted(count: Long, unit: String): String = if (count == 1L) "1 $unit" else "$count ${unit}s"
-
-/** Lightning addresses read as names; long ark/BOLT11 strings abbreviate to head…tail. */
-internal fun displayName(destination: String): String =
-    if (destination.contains('@')) destination else abbreviated(destination)
-
-/** Head…tail abbreviation for long identifiers (destinations, channel ids); short ones stay whole. */
-private fun abbreviated(value: String): String = if (value.length <= MAX_PLAIN_NAME_LENGTH) {
-    value
-} else {
-    value.take(NAME_PREFIX_LENGTH) + ELLIPSIS + value.takeLast(NAME_SUFFIX_LENGTH)
-}
-
-private fun initialOf(who: String): String = who.firstOrNull()?.uppercase() ?: "?"
 

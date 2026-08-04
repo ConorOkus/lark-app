@@ -6,17 +6,18 @@
 //! object; neither the seed nor any derived key crosses the FFI boundary — the
 //! only exports are seal/open of whole artifacts.
 //!
-//! Money-bearing live ops (new_address, send, unilateral exit, channel
-//! management) are wired in the follow-up slice against the live-captaind test
-//! lane (the plan's revised U2 test split puts those off the per-PR unit lane,
-//! since bark's balances/sends require real musig cosigning from a signing
-//! server that no in-process fixture can supply).
+//! Money-bearing live ops (new_address, both sends, boarding) are exported here
+//! but verified only on the live-captaind lane, never on the per-PR one: bark's
+//! balances and sends require real musig cosigning from a signing server that no
+//! in-process fixture can supply. Unilateral exit and channel management are
+//! still unexported.
 
 use std::str::FromStr;
 use std::sync::Arc;
 
 use bark::persist::sqlite::SqliteClient;
-use bark::onchain::OnchainWallet;
+use bark::movement::PaymentMethod;
+use bark::onchain::{ChainSync, OnchainWallet};
 use bark::{Config, Wallet};
 use bitcoin::{Amount, Network};
 use zeroize::Zeroize;
@@ -148,6 +149,39 @@ impl LarkWallet {
         Ok(addr.to_string())
     }
 
+    /// Bring the on-chain (bdk) wallet up to date with the chain source.
+    ///
+    /// Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
+    /// wallet and explicitly does not touch the bdk one, so a deposit sent to
+    /// [`Self::deposit_address`] stays invisible until this runs. This is an incremental sync
+    /// (`ChainSync`), not `initial_wallet_scan` — a full rescan costs a gap-limit sweep of the
+    /// descriptor and is only needed when adopting an already-used seed.
+    pub async fn onchain_sync(&self) -> Result<(), LarkError> {
+        let mut onchain = self.onchain.lock().await;
+        onchain.sync(&self.inner.chain).await.map_err(LarkError::from)?;
+        Ok(())
+    }
+
+    /// The on-chain balance, split by confirmation state. Read-only — call
+    /// [`Self::onchain_sync`] first for a current answer.
+    ///
+    /// Split rather than a single total because the two numbers mean different things to the
+    /// caller: a faucet payment shows up in `pending_sat` immediately but cannot be boarded
+    /// until it confirms, so "your sats arrived, waiting on confirmations" and "you can board
+    /// now" are different states and the UI has to be able to tell them apart.
+    pub async fn onchain_balance(&self) -> Result<OnchainBalanceInfo, LarkError> {
+        let onchain = self.onchain.lock().await;
+        let balance = onchain.balance();
+        Ok(OnchainBalanceInfo {
+            confirmed_sat: balance.confirmed.to_sat(),
+            // `immature` is coinbase-only, and irrelevant to a wallet funded from a faucet;
+            // it is folded into pending rather than dropped so the parts sum to the total.
+            pending_sat: (balance.trusted_pending + balance.untrusted_pending + balance.immature)
+                .to_sat(),
+            total_sat: balance.total().to_sat(),
+        })
+    }
+
     /// Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
     /// recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
     /// `sats` sets the amount for an amountless invoice. Returns a short summary.
@@ -159,6 +193,25 @@ impl LarkWallet {
             .await
             .map_err(LarkError::from)?;
         Ok(format!("{send:?}"))
+    }
+
+    /// Pay an Ark address out of round (the seam's `send` for a `tark1…` recipient).
+    ///
+    /// The counterpart to [`Self::send_bolt11`]: the app's own "Get paid" code is an Ark address,
+    /// so without this the wallet cannot pay another lark wallet at all. Out-of-round, so it does
+    /// not wait for the next round — but it can leave change VTXOs, which is what
+    /// [`Self::refresh`]'s maintenance pass eventually tidies.
+    pub async fn send_ark(&self, address: String, sats: u64) -> Result<String, LarkError> {
+        let destination = bark::ark::Address::from_str(&address)
+            .map_err(|_| LarkError::Invalid { msg: "not a valid ark address".into() })?;
+        let vtxos = self
+            .inner
+            .send_arkoor_payment(&destination, Amount::from_sat(sats))
+            .await
+            .map_err(LarkError::from)?;
+        // The recipient may receive several VTXOs when no single one covers the amount; the count
+        // is the only part of the result a caller could act on.
+        Ok(format!("sent {} sat in {} vtxo(s)", sats, vtxos.len()))
     }
 
     /// Board on-chain funds into the Ark (creates a VTXO). Enables a funded
@@ -174,27 +227,108 @@ impl LarkWallet {
     }
 
     /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
+    ///
+    /// Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
+    /// and creation time as well as the amounts: an activity row has to say who and when, and a
+    /// caller cannot invent either. `intended_balance_sat` is here because a movement that has
+    /// not completed has no meaningful effective balance yet — the row shows what was intended
+    /// until it settles, which is what the gateway core does with the same distinction.
     pub async fn movements(&self) -> Result<Vec<MovementInfo>, LarkError> {
-        let movements = self.inner.movements().await.map_err(LarkError::from)?;
+        let movements = self.inner.history().await.map_err(LarkError::from)?;
         Ok(movements
             .into_iter()
             .map(|m| MovementInfo {
                 id: m.id.0,
-                status: format!("{:?}", m.status),
+                status: MovementState::from(m.status),
                 effective_balance_sat: m.effective_balance.to_sat(),
+                intended_balance_sat: m.intended_balance.to_sat(),
                 offchain_fee_sat: m.offchain_fee.to_sat(),
+                // Whichever side is populated: an outbound movement names its recipients, an
+                // inbound one names how it arrived. Both empty is normal (a board, a refresh).
+                sent_to: m.sent_to.iter().map(|d| destination_label(&d.destination)).collect(),
+                received_on: m
+                    .received_on
+                    .iter()
+                    .map(|d| destination_label(&d.destination))
+                    .collect(),
+                // Seconds since the epoch; the platform owns date formatting and the user's locale.
+                created_at_epoch_seconds: m.time.created_at.timestamp(),
             })
             .collect())
     }
 }
 
+/// The string form of a movement counterparty.
+///
+/// `PaymentMethod` implements `Debug` but not `Display`, and `Debug` is not a UI string — it would
+/// put `Ark(Address { .. })` in an activity row. Each variant is rendered as the thing a user
+/// could actually copy or recognise.
+fn destination_label(method: &PaymentMethod) -> String {
+    match method {
+        PaymentMethod::Ark(address) => address.to_string(),
+        // Unchecked only in the type system: this address came out of our own movement record,
+        // so it was already valid for this wallet's network when it was written.
+        PaymentMethod::Bitcoin(address) => address.clone().assume_checked().to_string(),
+        PaymentMethod::OutputScript(script) => script.to_hex_string(),
+        PaymentMethod::Invoice(invoice) => invoice.to_string(),
+        PaymentMethod::Offer(offer) => offer.to_string(),
+        PaymentMethod::LightningAddress(address) => address.to_string(),
+        PaymentMethod::Custom(raw) => raw.clone(),
+    }
+}
+
+/// The on-chain wallet's balance, split by confirmation state.
+///
+/// `confirmed_sat` is what boarding can actually consume; `pending_sat` is what has been seen
+/// but is not yet spendable. `total_sat` is their sum, kept explicit so callers that only want
+/// "did anything arrive" do not have to add.
+#[derive(uniffi::Record)]
+pub struct OnchainBalanceInfo {
+    pub confirmed_sat: u64,
+    pub pending_sat: u64,
+    pub total_sat: u64,
+}
+
+/// Where a movement has got to.
+///
+/// A real enum rather than bark's `Debug` string: the platform branches on this to decide whether a
+/// row shows its effective or its intended amount, and a stringly-typed status makes that branch
+/// fail silently — a renamed variant upstream would drop every row from the activity list with
+/// nothing failing to compile. As an enum, the same rename is a build error on both sides.
+#[derive(uniffi::Enum)]
+pub enum MovementState {
+    Pending,
+    Successful,
+    Failed,
+    Canceled,
+}
+
+impl From<bark::movement::MovementStatus> for MovementState {
+    fn from(status: bark::movement::MovementStatus) -> Self {
+        match status {
+            bark::movement::MovementStatus::Pending => MovementState::Pending,
+            bark::movement::MovementStatus::Successful => MovementState::Successful,
+            bark::movement::MovementStatus::Failed => MovementState::Failed,
+            bark::movement::MovementStatus::Canceled => MovementState::Canceled,
+        }
+    }
+}
+
 /// A slim view of a bark `Movement` for the seam's activity list.
+///
+/// Signed balances: negative is outbound, positive inbound. Destination strings are whatever the
+/// movement recorded (an Ark address, an on-chain address, a BOLT11 invoice), left unparsed —
+/// deciding what to *show* for one is a presentation concern.
 #[derive(uniffi::Record)]
 pub struct MovementInfo {
     pub id: u32,
-    pub status: String,
+    pub status: MovementState,
     pub effective_balance_sat: i64,
+    pub intended_balance_sat: i64,
     pub offchain_fee_sat: u64,
+    pub sent_to: Vec<String>,
+    pub received_on: Vec<String>,
+    pub created_at_epoch_seconds: i64,
 }
 
 #[uniffi::export]

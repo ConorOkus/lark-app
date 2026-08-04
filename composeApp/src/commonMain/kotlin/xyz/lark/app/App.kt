@@ -8,18 +8,23 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import xyz.lark.app.core.CoreConfig
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
+import xyz.lark.app.state.DepositModel
 import xyz.lark.app.state.Route
 import xyz.lark.app.ui.screens.activity.ActivityScreen
 import xyz.lark.app.ui.screens.activity.TxDetailScreen
 import xyz.lark.app.ui.screens.activity.TxTechScreen
 import xyz.lark.app.ui.screens.home.HomeScreen
 import xyz.lark.app.ui.screens.onboarding.BoardingScreen
+import xyz.lark.app.ui.screens.onboarding.DepositActions
+import xyz.lark.app.ui.screens.onboarding.DepositScreen
 import xyz.lark.app.ui.screens.onboarding.FundScreen
 import xyz.lark.app.ui.screens.onboarding.HowItWorksScreen
 import xyz.lark.app.ui.screens.onboarding.RestoreScreen
@@ -51,7 +56,12 @@ private object AppGraph {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val selection: CoreSelection by lazy { buildCore(mode = CoreConfig.mode, scope = scope) }
     val machine: AppStateMachine by lazy {
-        AppStateMachine(core = selection.core, demo = selection.demo, scope = scope)
+        AppStateMachine(
+            core = selection.core,
+            demo = selection.demo,
+            scope = scope,
+            funding = selection.funding,
+        )
     }
 }
 
@@ -74,7 +84,8 @@ fun App() {
  * composable to [model] slices and [machine] intents (via `*Route` binders where the
  * callback wiring would not fit on a branch line).
  */
-@Suppress("CyclomaticComplexMethod") // one branch per route by design
+// One branch per route, which is the point: the whole route table is readable in one place.
+@Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
 private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
     Box(
@@ -94,14 +105,20 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             )
             Route.FUND -> FundScreen(
                 onBack = machine::back,
-                onMoveBitcoinIn = machine::startBoarding,
+                // With an on-device core, "move bitcoin in" means an on-chain deposit this wallet
+                // owns. Without one (demo, gateway) there is nothing to show, so the old
+                // straight-to-settling behaviour stands.
+                onMoveBitcoinIn = if (model.deposit != null) machine::goDeposit else machine::startBoarding,
                 onBuyWithCard = machine::startBoarding,
                 onLater = machine::finishOnboarding,
             )
+            Route.DEPOSIT -> model.deposit?.let { deposit -> DepositRoute(deposit, machine) }
             Route.BOARDING -> BoardingScreen(onSkip = machine::finishOnboarding)
             Route.RESTORE -> RestoreScreen(
                 onBack = machine::back,
                 onRestore = machine::finishRestore,
+                failed = model.restore.failed,
+                busy = model.restore.busy,
             )
             Route.HOME -> HomeScreen(model = model, machine = machine)
             Route.ACTIVITY -> ActivityScreen(model = model, machine = machine)
@@ -143,6 +160,28 @@ private fun PendingRoute(model: AppModel, machine: AppStateMachine) = PendingScr
     recipientName = model.send.recipientName,
     onDone = { machine.go(Route.HOME) },
 )
+
+/**
+ * The DEPOSIT branch. Unlike the receive screen's Copy — which only flips a label — this writes the
+ * address to the clipboard for real, because the next thing the user does with it is paste it into a
+ * faucet or another wallet.
+ */
+@Composable
+private fun DepositRoute(deposit: DepositModel, machine: AppStateMachine) {
+    val clipboard = LocalClipboardManager.current
+    DepositScreen(
+        deposit = deposit,
+        actions = DepositActions(
+            onBack = machine::back,
+            onCopy = {
+                clipboard.setText(AnnotatedString(deposit.address))
+                machine.copyCode()
+            },
+            onCheckAgain = machine::checkForDeposit,
+            onBoard = machine::boardConfirmed,
+        ),
+    )
+}
 
 /** The RECEIVE branch: binds [ReceiveScreen]'s callbacks to the machine's intents. */
 @Composable

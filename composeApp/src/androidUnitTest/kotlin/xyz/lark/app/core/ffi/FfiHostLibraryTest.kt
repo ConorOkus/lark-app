@@ -148,6 +148,72 @@ class FfiHostLibraryTest {
     }
 
     /**
+     * The on-chain balance is a local read: no chain traffic, all three parts zero on a fresh
+     * wallet.
+     *
+     * This is what makes it usable as the Advanced screen's exit-reserve number (issue #20) even
+     * when the wallet has never reached a chain source — unlike [uniffi.lark_ffi.LarkWallet.onchainSync]
+     * below, which is inherently live work.
+     */
+    @Test
+    fun theOnchainBalanceIsALocalReadAndStartsEmpty() = runBlocking {
+        requireHostLibrary()
+        StubEsplora.start().use { esplora ->
+            withDatadir { datadir ->
+                uniffi.lark_ffi.openWallet(
+                    datadir = datadir.absolutePath,
+                    network = "signet",
+                    arkServer = UNREACHABLE_ARK_SERVER,
+                    esplora = esplora.baseUrl,
+                    words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT),
+                ).use { wallet ->
+                    val balance = wallet.onchainBalance()
+                    assertEquals(0uL, balance.confirmedSat, "a fresh wallet has nothing confirmed")
+                    assertEquals(0uL, balance.pendingSat, "a fresh wallet has nothing pending")
+                    assertEquals(0uL, balance.totalSat, "and so its total is zero")
+                }
+            }
+        }
+    }
+
+    /**
+     * Incremental on-chain sync needs a **fourth** esplora endpoint — `/blocks` — so it cannot run
+     * on the hermetic lane.
+     *
+     * Measured, not assumed: without this pinned, the natural expectation is that the three
+     * endpoints covering wallet creation also cover a sync, and the funding flow's dependency on a
+     * real chain source would only surface on a device. Verifying that a sync actually *finds*
+     * money stays live-lane work (the faucet → board smoke); what belongs here is the shape of the
+     * dependency. Serving `/blocks` from [StubEsplora] would mean fabricating a block chain bdk
+     * accepts, which pins fiction rather than behaviour.
+     */
+    @Test
+    fun onchainSyncNeedsAChainEndpointTheStubDoesNotCover() = runBlocking {
+        requireHostLibrary()
+        StubEsplora.start().use { esplora ->
+            withDatadir { datadir ->
+                uniffi.lark_ffi.openWallet(
+                    datadir = datadir.absolutePath,
+                    network = "signet",
+                    arkServer = UNREACHABLE_ARK_SERVER,
+                    esplora = esplora.baseUrl,
+                    words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT),
+                ).use { wallet ->
+                    assertTrue(
+                        runCatching { wallet.onchainSync() }.isFailure,
+                        "onchain_sync must not appear to succeed without a full chain source",
+                    )
+                }
+                assertEquals(
+                    listOf(ESPLORA_RECENT_BLOCKS_PATH),
+                    esplora.unknownPathsRequested,
+                    "the endpoint an onchain sync adds beyond wallet creation's three",
+                )
+            }
+        }
+    }
+
+    /**
      * Skips when the host library is absent — unless this lane is required, in which case an
      * absent library is a failure.
      *
@@ -187,5 +253,8 @@ class FfiHostLibraryTest {
 
         /** Signet/mutinynet taproot addresses are bech32m under this HRP. */
         const val SIGNET_TAPROOT_PREFIX = "tb1p"
+
+        /** esplora's recent-blocks listing, which an incremental onchain sync reads. */
+        const val ESPLORA_RECENT_BLOCKS_PATH = "/blocks"
     }
 }

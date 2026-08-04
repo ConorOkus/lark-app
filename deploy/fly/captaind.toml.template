@@ -7,7 +7,15 @@
 data_dir = "/data/captaind"
 network = "signet"
 
-vtxo_lifetime = 8640
+# 86,400 blocks ≈ 30 days at mutinynet's 30s spacing (was 8640 ≈ 72 hours).
+#
+# Raised for keys-on-device: with the wallet on the phone and no background refresh, nothing
+# refreshes a VTXO while LARK is closed, so the lifetime IS the length of time a tester may ignore
+# the app before the server can sweep their money. Three days is a trap on a test network people
+# check weekly. The app's own "needs a moment" warning fires at an eighth of this (~3.75 days
+# before expiry), which is only a useful warning if the window is weeks rather than hours.
+# Reasoned through in docs/liveness-envelope.md; only newly created VTXOs get the new lifetime.
+vtxo_lifetime = 86400
 vtxo_exit_delta = 144
 
 min_board_amount = "20000 sat"
