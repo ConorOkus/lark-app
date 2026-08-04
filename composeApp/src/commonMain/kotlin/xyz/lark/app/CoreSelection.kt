@@ -54,7 +54,9 @@ internal fun buildCore(
     // FfiCoreProvider. Absent a factory there is nothing to fall back to that would not be a lie
     // about whose money is on screen, so this fails loudly.
     CoreMode.FFI -> requireNotNull(FfiCoreProvider.factory) {
-        "CoreMode.FFI needs FfiCoreProvider.factory set by the platform entry point before composition"
+        "CoreMode.FFI has no core on this platform. iOS registers one from MainViewController; " +
+            "Android cannot yet (its FfiLarkCore is blocked — see docs/ffi/kotlin-bindings-status.md), " +
+            "so run the Android app with CoreConfig.mode = DEMO or GATEWAY."
     }(scope).let { core ->
         // Boarding is a capability, not a mode: asking the core itself keeps this branch honest if a
         // future in-process core arrives without an on-chain wallet.

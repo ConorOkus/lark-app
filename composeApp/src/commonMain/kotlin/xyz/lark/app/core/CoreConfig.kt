@@ -29,7 +29,13 @@ enum class CoreMode {
  * [CoreMode.GATEWAY].
  */
 object CoreConfig {
-    /** Which core the app composes at startup. */
+    /**
+     * Which core the app composes at startup.
+     *
+     * [CoreMode.FFI] is **iOS-only** today: the Android adapter is still blocked on an off-thread
+     * hang in bark's wallet-open path, so an Android build in this mode fails fast at the
+     * composition root with an explanation. Switch to [CoreMode.DEMO] to run the Android app.
+     */
     val mode: CoreMode = CoreMode.FFI
 
     /** Base URL of the Ark gateway; empty by design — set per build, never a production default. */
