@@ -214,8 +214,24 @@ impl LarkWallet {
         Ok(format!("sent {} sat in {} vtxo(s)", sats, vtxos.len()))
     }
 
-    /// Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-    /// in-process wallet; the boarded VTXO is spendable after board confirmations.
+    /// Board **everything** the on-chain wallet holds into Ark.
+    ///
+    /// This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+    /// wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+    /// board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+    /// pay it with. `board_all` computes the boardable amount after fees itself.
+    pub async fn board_all(&self) -> Result<String, LarkError> {
+        let mut onchain = self.onchain.lock().await;
+        let pending = self
+            .inner
+            .board_all(&mut *onchain)
+            .await
+            .map_err(LarkError::from)?;
+        Ok(format!("{pending:?}"))
+    }
+
+    /// Board a specific amount into Ark. Callers wanting to move a whole balance want
+    /// [`Self::board_all`] instead — see the note there about fees.
     pub async fn board(&self, sats: u64) -> Result<String, LarkError> {
         let mut onchain = self.onchain.lock().await;
         let pending = self

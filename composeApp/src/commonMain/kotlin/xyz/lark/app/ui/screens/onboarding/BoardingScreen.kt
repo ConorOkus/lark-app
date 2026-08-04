@@ -74,7 +74,7 @@ fun BoardingScreen(
             )
         }
         OutlinePillButton(
-            text = "Skip ahead (demo)",
+            text = "Go to my wallet",
             onClick = onSkip,
             height = SkipButtonHeight,
             modifier = Modifier

@@ -89,6 +89,19 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(ContentGap),
         ) {
             MainGroup(model = model, machine = machine)
+            // Only shown by a core that can board. Without it the on-chain deposit screen would be
+            // reachable during onboarding and never again — which is exactly when a tester who
+            // skipped funding, or spent everything, needs it.
+            if (model.deposit != null) {
+                SettingsGroup {
+                    ChevronRow(
+                        title = "Add money",
+                        subtitle = "Move bitcoin in from another wallet",
+                        subtitleColor = LarkColors.TextPrimary.copy(alpha = SUBTITLE_ALPHA),
+                        onClick = machine::goDeposit,
+                    )
+                }
+            }
             SettingsGroup {
                 ChevronRow(
                     title = "Advanced",

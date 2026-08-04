@@ -31,6 +31,11 @@ interface OnchainFunding {
     /** Re-read the chain so a fresh deposit becomes visible. Safe to call repeatedly. */
     suspend fun syncOnchain()
 
-    /** Board [sats] of confirmed funds. False means nothing was boarded. */
-    suspend fun board(sats: Long): Boolean
+    /**
+     * Board the whole on-chain balance. False means nothing was boarded and the money is untouched.
+     *
+     * No amount, because the fee comes out of the same coins: asking to board exactly the confirmed
+     * balance always fails, and that is the only amount this flow would ever pass.
+     */
+    suspend fun boardAll(): Boolean
 }

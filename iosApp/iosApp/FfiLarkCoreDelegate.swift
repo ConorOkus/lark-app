@@ -153,8 +153,8 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in try await wallet.sendArk(address: address, sats: UInt64(sats)) }
     }
 
-    func board(sats: Int64, onResult: @escaping (String?, String?) -> Void) {
-        perform(onResult) { wallet in try await wallet.board(sats: UInt64(sats)) }
+    func boardAll(onResult: @escaping (String?, String?) -> Void) {
+        perform(onResult) { wallet in try await wallet.boardAll() }
     }
 
     // MARK: - Plumbing
@@ -164,6 +164,7 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
     /// and a poll that lands during the (slow) open must not take the app down.
     private func perform<T>(
         _ onResult: @escaping (T?, String?) -> Void,
+        name: String = #function,
         _ body: @escaping (LarkWallet) async throws -> T
     ) {
         guard let wallet = currentWallet else {
@@ -174,6 +175,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
             do {
                 onResult(try await body(wallet), nil)
             } catch {
+                // The adapter above turns every failure into the same coarse seam outcome, so this
+                // is the only place a cause survives. A wallet that says "that didn't go through"
+                // with the reason nowhere on record is undebuggable in the field as well as here.
+                NSLog("lark: %@ failed: %@", name, "\(error)")
                 onResult(nil, "\(error)")
             }
         }
@@ -181,6 +186,7 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
 
     private func performVoid(
         _ onDone: @escaping (String?) -> Void,
+        name: String = #function,
         _ body: @escaping (LarkWallet) async throws -> Void
     ) {
         guard let wallet = currentWallet else {
@@ -192,6 +198,7 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
                 try await body(wallet)
                 onDone(nil)
             } catch {
+                NSLog("lark: %@ failed: %@", name, "\(error)")
                 onDone("\(error)")
             }
         }

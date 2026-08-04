@@ -535,10 +535,20 @@ public protocol LarkWalletProtocol : AnyObject {
     func balanceSats() async throws  -> UInt64
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
     func board(sats: UInt64) async throws  -> String
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+    func boardAll() async throws  -> String
     
     /**
      * Decrypt a state blob, returning `(plaintext, version)`. The header
@@ -710,8 +720,8 @@ open func balanceSats()async throws  -> UInt64 {
 }
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
 open func board(sats: UInt64)async throws  -> String {
     return
@@ -720,6 +730,31 @@ open func board(sats: UInt64)async throws  -> String {
                 uniffi_lark_ffi_fn_method_larkwallet_board(
                     self.uniffiClonePointer(),
                     FfiConverterUInt64.lower(sats)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+open func boardAll()async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_board_all(
+                    self.uniffiClonePointer()
+                    
                 )
             },
             pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
@@ -1734,7 +1769,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_balance_sats() != 48413) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lark_ffi_checksum_method_larkwallet_board() != 9117) {
+    if (uniffi_lark_ffi_checksum_method_larkwallet_board() != 59056) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_board_all() != 3671) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob() != 36113) {

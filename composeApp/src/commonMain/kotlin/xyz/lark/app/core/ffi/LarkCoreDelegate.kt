@@ -83,8 +83,14 @@ interface LarkCoreDelegate {
      */
     fun sendArk(address: String, sats: Long, onResult: (summary: String?, error: String?) -> Unit)
 
-    /** Board [sats] of confirmed on-chain funds into Ark, creating a VTXO. */
-    fun board(sats: Long, onResult: (summary: String?, error: String?) -> Unit)
+    /**
+     * Board everything the on-chain wallet holds into Ark, creating a VTXO.
+     *
+     * Deliberately amount-free. Boarding an explicit amount equal to the whole confirmed balance
+     * cannot work — the board transaction's on-chain fee comes out of the same coins — so an
+     * "amount" parameter here would be a trap for the only caller there is.
+     */
+    fun boardAll(onResult: (summary: String?, error: String?) -> Unit)
 
     /** Payment history, in whatever order the crate returns; the adapter sorts. */
     fun movements(onResult: (movements: List<FfiMovement>?, error: String?) -> Unit)

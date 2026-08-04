@@ -36,6 +36,13 @@ private const val SCAN_SATS = 520L
 private const val HIDDEN_BALANCE = "••••"
 
 /**
+ * How long the settling screen keeps working before it stops on its own: ~5 minutes, which covers
+ * the three board confirmations mutinynet needs (~90s) plus a round, with room to spare.
+ */
+private const val BOARD_SETTLE_ATTEMPTS = 15
+private const val BOARD_SETTLE_POLL_MILLIS = 20_000L
+
+/**
  * The default reveal-countdown clock: monotonic elapsed millis since machine construction.
  * Monotonic so device wall-clock changes can't lengthen or shorten the reveal window.
  */
@@ -134,6 +141,7 @@ class AppStateMachine(
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
+    private var boardSettleJob: Job? = null
 
     init {
         // The core is the source of truth for wallet facts; a real (push-based) core emits
@@ -227,9 +235,9 @@ class AppStateMachine(
     /**
      * Boards everything confirmed, then shows the settling screen.
      *
-     * Boards the whole confirmed balance rather than asking for an amount: this is onboarding money
-     * arriving from a faucet, and there is nothing useful to leave behind on-chain — the exit
-     * reserve is what an unboarded remainder would be for, and that is a later concern.
+     * The whole balance rather than an amount: this is onboarding money arriving from a faucet, and
+     * there is nothing useful to leave behind on-chain. It also has to be the whole balance —
+     * boarding a named amount equal to the confirmed balance cannot pay its own on-chain fee.
      */
     fun boardConfirmed() {
         val sats = funding?.confirmedSats ?: 0L
@@ -237,9 +245,14 @@ class AppStateMachine(
         if (boardable) {
             update { it.copy(boarding = true, boardFailed = false) }
             scope.launch {
-                val boarded = requireNotNull(funding).board(sats)
+                // Boards the whole balance: the core works out what is left after the on-chain fee,
+                // which is why this passes no amount. See OnchainFunding.boardAll.
+                val boarded = requireNotNull(funding).boardAll()
                 update { it.copy(boarding = false, boardFailed = !boarded) }
-                if (boarded) push(Route.BOARDING)
+                if (boarded) {
+                    push(Route.BOARDING)
+                    watchBoardSettle()
+                }
             }
         }
     }
@@ -473,6 +486,31 @@ class AppStateMachine(
     /** Lands [route] only if the user is still on the working screen — a stale job must not steal the route. */
     private fun landIfStillSending(route: Route) = update {
         if (it.route == Route.SENDING) it.copy(route = route, stack = emptyList()) else it
+    }
+
+    /**
+     * Drives a boarded deposit to completion while the settling screen is up.
+     *
+     * The screen tells the user "keep LARK open and it will finish here", and this is what makes
+     * that true. A board only becomes a spendable VTXO once its transaction confirms *and* the
+     * wallet registers it, and registration happens inside the engine's maintenance pass — the
+     * balance poll alone reads the database and would spin forever. Leaves for home as soon as
+     * money shows up, gives up quietly after the budget (the skip affordance still works), and
+     * stops if the user navigates away.
+     */
+    private fun watchBoardSettle() {
+        boardSettleJob?.cancel()
+        boardSettleJob = scope.launch {
+            repeat(BOARD_SETTLE_ATTEMPTS) {
+                delay(BOARD_SETTLE_POLL_MILLIS)
+                if (state.route != Route.BOARDING) return@launch
+                core.refresh()
+                if (core.balanceSats.value > 0 && state.route == Route.BOARDING) {
+                    go(Route.HOME)
+                    return@launch
+                }
+            }
+        }
     }
 
     // --- Refresh ---

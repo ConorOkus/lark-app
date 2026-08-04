@@ -761,6 +761,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -788,6 +792,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_board(`ptr`: Pointer,`sats`: Long,
     ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_board_all(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_decrypt_state_blob(`ptr`: Pointer,`blob`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_lark_ffi_fn_method_larkwallet_deposit_address(`ptr`: Pointer,
@@ -807,6 +813,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_refresh(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_send_ark(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_send_bolt11(`ptr`: Pointer,`invoice`: RustBuffer.ByValue,`sats`: Long,
     ): Long
@@ -954,6 +962,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_board(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_board_all(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_deposit_address(
@@ -973,6 +983,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_refresh(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_send_ark(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11(
     ): Short
@@ -1017,7 +1029,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_balance_sats() != 48413.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_board() != 9117.toShort()) {
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_board() != 59056.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_board_all() != 3671.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob() != 36113.toShort()) {
@@ -1048,6 +1063,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_send_ark() != 38299.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11() != 45122.toShort()) {
@@ -1483,10 +1501,20 @@ public interface LarkWalletInterface {
     suspend fun `balanceSats`(): kotlin.ULong
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
     suspend fun `board`(`sats`: kotlin.ULong): kotlin.String
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+    suspend fun `boardAll`(): kotlin.String
     
     /**
      * Decrypt a state blob, returning `(plaintext, version)`. The header
@@ -1562,6 +1590,16 @@ public interface LarkWalletInterface {
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
      */
     suspend fun `refresh`()
+    
+    /**
+     * Pay an Ark address out of round (the seam's `send` for a `tark1…` recipient).
+     *
+     * The counterpart to [`Self::send_bolt11`]: the app's own "Get paid" code is an Ark address,
+     * so without this the wallet cannot pay another lark wallet at all. Out-of-round, so it does
+     * not wait for the next round — but it can leave change VTXOs, which is what
+     * [`Self::refresh`]'s maintenance pass eventually tidies.
+     */
+    suspend fun `sendArk`(`address`: kotlin.String, `sats`: kotlin.ULong): kotlin.String
     
     /**
      * Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
@@ -1685,8 +1723,8 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
     @Throws(LarkException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -1696,6 +1734,35 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
             UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_board(
                 thisPtr,
                 FfiConverterULong.lower(`sats`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `boardAll`() : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_board_all(
+                thisPtr,
+                
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -1944,6 +2011,35 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * Pay an Ark address out of round (the seam's `send` for a `tark1…` recipient).
+     *
+     * The counterpart to [`Self::send_bolt11`]: the app's own "Get paid" code is an Ark address,
+     * so without this the wallet cannot pay another lark wallet at all. Out-of-round, so it does
+     * not wait for the next round — but it can leave change VTXOs, which is what
+     * [`Self::refresh`]'s maintenance pass eventually tidies.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendArk`(`address`: kotlin.String, `sats`: kotlin.ULong) : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_send_ark(
+                thisPtr,
+                FfiConverterString.lower(`address`),FfiConverterULong.lower(`sats`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
      * recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
@@ -2015,7 +2111,7 @@ public object FfiConverterTypeLarkWallet: FfiConverter<LarkWallet, Pointer> {
  */
 data class MovementInfo (
     var `id`: kotlin.UInt, 
-    var `status`: kotlin.String, 
+    var `status`: MovementState, 
     var `effectiveBalanceSat`: kotlin.Long, 
     var `intendedBalanceSat`: kotlin.Long, 
     var `offchainFeeSat`: kotlin.ULong, 
@@ -2034,7 +2130,7 @@ public object FfiConverterTypeMovementInfo: FfiConverterRustBuffer<MovementInfo>
     override fun read(buf: ByteBuffer): MovementInfo {
         return MovementInfo(
             FfiConverterUInt.read(buf),
-            FfiConverterString.read(buf),
+            FfiConverterTypeMovementState.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterULong.read(buf),
@@ -2046,7 +2142,7 @@ public object FfiConverterTypeMovementInfo: FfiConverterRustBuffer<MovementInfo>
 
     override fun allocationSize(value: MovementInfo) = (
             FfiConverterUInt.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterTypeMovementState.allocationSize(value.`status`) +
             FfiConverterLong.allocationSize(value.`effectiveBalanceSat`) +
             FfiConverterLong.allocationSize(value.`intendedBalanceSat`) +
             FfiConverterULong.allocationSize(value.`offchainFeeSat`) +
@@ -2057,7 +2153,7 @@ public object FfiConverterTypeMovementInfo: FfiConverterRustBuffer<MovementInfo>
 
     override fun write(value: MovementInfo, buf: ByteBuffer) {
             FfiConverterUInt.write(value.`id`, buf)
-            FfiConverterString.write(value.`status`, buf)
+            FfiConverterTypeMovementState.write(value.`status`, buf)
             FfiConverterLong.write(value.`effectiveBalanceSat`, buf)
             FfiConverterLong.write(value.`intendedBalanceSat`, buf)
             FfiConverterULong.write(value.`offchainFeeSat`, buf)
@@ -2249,6 +2345,46 @@ public object FfiConverterTypeLarkError : FfiConverterRustBuffer<LarkException> 
     }
 
 }
+
+
+
+/**
+ * Where a movement has got to.
+ *
+ * A real enum rather than bark's `Debug` string: the platform branches on this to decide whether a
+ * row shows its effective or its intended amount, and a stringly-typed status makes that branch
+ * fail silently — a renamed variant upstream would drop every row from the activity list with
+ * nothing failing to compile. As an enum, the same rename is a build error on both sides.
+ */
+
+enum class MovementState {
+    
+    PENDING,
+    SUCCESSFUL,
+    FAILED,
+    CANCELED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMovementState: FfiConverterRustBuffer<MovementState> {
+    override fun read(buf: ByteBuffer) = try {
+        MovementState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: MovementState) = 4UL
+
+    override fun write(value: MovementState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 

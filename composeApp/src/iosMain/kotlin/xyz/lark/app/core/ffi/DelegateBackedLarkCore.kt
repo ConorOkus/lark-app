@@ -43,6 +43,18 @@ private const val MIN_BOARD_SATS = 20_000L
 private val DEFAULT_POLL_INTERVAL = 15.seconds
 
 /**
+ * Run the engine's maintenance pass every Nth poll cycle — at the default cadence, about once a
+ * minute.
+ *
+ * Not optional housekeeping. Reading the balance only reads the database; it is *maintenance* that
+ * registers a confirmed board, claims an incoming Lightning payment, and refreshes VTXOs nearing
+ * expiry. With a gateway a daemon did this whether or not anyone opened the app; on device nothing
+ * does it unless the core does, and without it money can sit boarded-but-invisible indefinitely.
+ * Onboarding promises "LARK keeps your wallet ready in the background" — this is that promise.
+ */
+private const val MAINTENANCE_EVERY_N_CYCLES = 4
+
+/**
  * The seam over the in-process Rust core, reached through a platform [LarkCoreDelegate] (M2 U3).
  *
  * Three problems this solves, none of them business logic:
@@ -215,12 +227,31 @@ class DelegateBackedLarkCore(
 
     // --- Reads ---
 
+    private var pollCycle = 0
+
     private suspend fun pollLoop() {
         while (true) {
-            if (walletOpen) pollOnce()
+            if (walletOpen) {
+                // The first cycle after an open always maintains: it is the one most likely to have
+                // work waiting (a board that confirmed while the app was closed, say).
+                val maintain = pollCycle % MAINTENANCE_EVERY_N_CYCLES == 0
+                pollCycle++
+                if (maintain) runMaintenance()
+                pollOnce()
+            }
             // Waits out the interval, but a triggered poll cuts the wait short.
             withTimeoutOrNull(pollInterval) { pollTrigger.receive() }
         }
+    }
+
+    /**
+     * Maintenance plus an on-chain sync, the two things a poll cycle cannot do for itself.
+     * Failures are left to [pollOnce] to classify — a maintenance pass that cannot reach the server
+     * is the same reachability signal as a balance read that cannot.
+     */
+    private suspend fun runMaintenance() {
+        delegate.awaitDone { onDone -> refresh(onDone) }
+        delegate.awaitDone { onDone -> onchainSync(onDone) }
     }
 
     private suspend fun pollOnce() = pollMutex.withLock {
@@ -273,10 +304,7 @@ class DelegateBackedLarkCore(
 
     override suspend fun refresh() {
         if (!walletOpen) return
-        delegate.awaitDone { onDone -> refresh(onDone) }
-        // Boarding registers on maintenance, and a deposit only shows up after an onchain sync;
-        // both belong to "put my money back on solid ground".
-        delegate.awaitDone { onDone -> onchainSync(onDone) }
+        runMaintenance()
         pollOnce()
     }
 
@@ -298,9 +326,9 @@ class DelegateBackedLarkCore(
         }
     }
 
-    override suspend fun board(sats: Long): Boolean {
+    override suspend fun boardAll(): Boolean {
         if (!walletOpen) return false
-        val summary = delegate.awaitValue { onResult -> board(sats, onResult) }
+        val summary = delegate.awaitValue { onResult -> boardAll(onResult) }
         pollTrigger.trySend(Unit)
         return summary != null
     }
