@@ -142,10 +142,13 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
                 count: Int32(summary.count),
                 totalSat: Int64(summary.totalSat),
                 // Optional across the boundary: Kotlin sees null, not a sentinel height.
-                soonestExpiryHeight: summary.soonestExpiryHeight.map { KotlinLong(value: Int64($0)) },
-                tipHeight: Int64(summary.tipHeight)
+                soonestExpiryHeight: summary.soonestExpiryHeight.map { KotlinLong(value: Int64($0)) }
             )
         }
+    }
+
+    func chainTip(onResult: @escaping (KotlinLong?, String?) -> Void) {
+        perform(onResult) { wallet in KotlinLong(value: Int64(try await wallet.chainTip())) }
     }
 
     // MARK: - Writes

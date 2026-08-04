@@ -134,6 +134,15 @@ class DelegateBackedLarkCore(
     private var onchain: FfiOnchainBalance? = null
     private var vtxos: FfiVtxoSummary? = null
 
+    /**
+     * Last known chain tip, refreshed on the maintenance cadence rather than every poll.
+     *
+     * Reading it is an uncached HTTP request, and its only consumer is a countdown measured in days
+     * — so fetching it four times a minute on a phone would be pure waste. Held across cycles so a
+     * failed read leaves the previous value standing instead of blanking the countdown.
+     */
+    private var tipHeight: Long? = null
+
     override val walletExists: StateFlow<Boolean> = walletExistsFlow.asStateFlow()
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
     override val health: StateFlow<HealthState> = healthFlow.asStateFlow()
@@ -271,6 +280,9 @@ class DelegateBackedLarkCore(
     private suspend fun runMaintenance() {
         delegate.awaitDone { onDone -> refresh(onDone) }
         delegate.awaitDone { onDone -> onchainSync(onDone) }
+        // The network half of the expiry countdown, on the slow cadence. A failure keeps the last
+        // known tip rather than clearing it: a slightly stale countdown beats no countdown.
+        delegate.awaitValue<Long> { onResult -> chainTip(onResult) }?.let { tipHeight = it }
     }
 
     private suspend fun pollOnce() = pollMutex.withLock {
@@ -298,8 +310,8 @@ class DelegateBackedLarkCore(
                 ?.let { address -> arkReceiveUri(address) }
         }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
-        // Keeps the Advanced screen's VTXO count, expiry countdown and chain tip real rather than
-        // placeholders; also the only way the user can see an expiry deadline at all.
+        // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
+        // expiry deadline visible at all, and it costs nothing to keep current.
         vtxos = delegate.awaitValue { onResult -> vtxoSummary(onResult) }
     }
 
@@ -312,7 +324,7 @@ class DelegateBackedLarkCore(
             vtxoTotalSats = vtxos?.totalSat ?: balanceFlow.value,
             soonestExpiry = blockExpiryLabel(
                 expiryHeight = vtxos?.soonestExpiryHeight,
-                tipHeight = vtxos?.tipHeight ?: 0L,
+                tipHeight = tipHeight ?: 0L,
                 secondsPerBlock = tuning.secondsPerBlock,
             ),
             // The engine records no refresh timestamp, so this one stays honestly unknown.
@@ -324,7 +336,7 @@ class DelegateBackedLarkCore(
             arkServerStatus = healthFlow.value.display.aspStatus,
             nextRound = PLACEHOLDER,
             lightningBridge = PLACEHOLDER,
-            chainTip = vtxos?.tipHeight?.takeIf { it > 0 },
+            chainTip = tipHeight?.takeIf { it > 0 },
         ),
     )
 
@@ -365,8 +377,8 @@ class DelegateBackedLarkCore(
         if (!walletOpen) return
         delegate.awaitDone { onDone -> onchainSync(onDone) }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
-        // Keeps the Advanced screen's VTXO count, expiry countdown and chain tip real rather than
-        // placeholders; also the only way the user can see an expiry deadline at all.
+        // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
+        // expiry deadline visible at all, and it costs nothing to keep current.
         vtxos = delegate.awaitValue { onResult -> vtxoSummary(onResult) }
     }
 }
