@@ -7,6 +7,7 @@ package xyz.lark.app.core.gateway
 
 import xyz.lark.app.core.format.MoneyFormat
 import xyz.lark.app.core.format.abbreviated
+import xyz.lark.app.core.format.blockExpiryLabel
 import xyz.lark.app.core.format.counted
 import xyz.lark.app.core.format.displayName
 import xyz.lark.app.core.format.initialOf
@@ -48,8 +49,7 @@ private const val RECENTS_LIMIT = 3
 
 
 // 10-minute blocks: the same back-of-envelope maths the design's expiry copy assumes.
-private const val BLOCKS_PER_DAY = 144L
-private const val BLOCKS_PER_HOUR = 6L
+private const val TEN_MINUTE_BLOCK_SECONDS = 600
 
 /** msat → whole sats for channel balances (KTD-6: money is integer sats end-to-end). */
 private const val MSATS_PER_SAT = 1_000L
@@ -179,13 +179,16 @@ private val WHITESPACE = Regex("\\s+")
 internal fun soonestExpiryLabel(vtxos: List<WalletVtxoInfo>, tipHeight: Long): String =
     blockExpiryLabel(vtxos.minOfOrNull { it.expiryHeight }, tipHeight)
 
-/** One expiry height in the block-countdown voice; [PLACEHOLDER] until height and tip are known. */
+/**
+ * One expiry height in the block-countdown voice; [PLACEHOLDER] until height and tip are known.
+ *
+ * Still assumes 10-minute blocks, which is what the design's expiry copy was written against and
+ * what this suite pins. That is wrong on mutinynet — the countdown reads ~20x longer than reality —
+ * but it is a pre-existing property of the gateway core, not something to change silently underneath
+ * its tests. The in-process core passes the real spacing (see the shared helper).
+ */
 internal fun blockExpiryLabel(expiryHeight: Long?, tipHeight: Long): String =
-    if (expiryHeight == null || tipHeight <= 0) {
-        PLACEHOLDER
-    } else {
-        "block ${MoneyFormat.grouped(expiryHeight)} · ${expiryCountdown(expiryHeight - tipHeight)}"
-    }
+    blockExpiryLabel(expiryHeight, tipHeight, secondsPerBlock = TEN_MINUTE_BLOCK_SECONDS)
 
 /**
  * The channels snapshot the seam exposes (plan U4). The bridge total the UI shows is the sum
@@ -216,12 +219,6 @@ private fun channelState(channel: LightningChannelInfo): ChannelState = when {
     channel.isUsable -> ChannelState.USABLE
     !channel.isChannelReady -> ChannelState.OPENING
     else -> ChannelState.UNUSABLE
-}
-
-private fun expiryCountdown(blocks: Long): String = when {
-    blocks <= 0 -> "expired"
-    blocks < BLOCKS_PER_DAY -> "in " + counted(maxOf(1L, blocks / BLOCKS_PER_HOUR), "hour")
-    else -> "in " + counted(blocks / BLOCKS_PER_DAY, "day")
 }
 
 /**

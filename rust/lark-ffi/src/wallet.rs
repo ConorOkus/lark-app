@@ -162,6 +162,28 @@ impl LarkWallet {
         Ok(())
     }
 
+    /// The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry against
+    /// the current chain tip.
+    ///
+    /// The expiry is the point of this export. With no background refresh, the only thing standing
+    /// between a user and a swept VTXO is being told the deadline, so a wallet that cannot report
+    /// it cannot warn. Returning the tip alongside it keeps the arithmetic honest: "expires at
+    /// height H" means nothing without the height it is measured from, and the caller must not
+    /// have to guess the tip from a separate, possibly staler, read.
+    ///
+    /// `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+    /// height, which would read as "already expired".
+    pub async fn vtxo_summary(&self) -> Result<VtxoSummary, LarkError> {
+        let vtxos = self.inner.spendable_vtxos().await.map_err(LarkError::from)?;
+        let tip_height = self.inner.chain.tip().await.map_err(LarkError::from)?;
+        Ok(VtxoSummary {
+            count: vtxos.len() as u32,
+            total_sat: vtxos.iter().map(|v| v.vtxo.amount().to_sat()).sum(),
+            soonest_expiry_height: vtxos.iter().map(|v| v.vtxo.expiry_height()).min(),
+            tip_height,
+        })
+    }
+
     /// The on-chain balance, split by confirmation state. Read-only — call
     /// [`Self::onchain_sync`] first for a current answer.
     ///
@@ -291,6 +313,19 @@ fn destination_label(method: &PaymentMethod) -> String {
         PaymentMethod::LightningAddress(address) => address.to_string(),
         PaymentMethod::Custom(raw) => raw.clone(),
     }
+}
+
+/// A summary of the wallet's spendable VTXOs.
+///
+/// Heights rather than dates, deliberately: a VTXO expires at a block height, and converting that
+/// to wall-clock time needs the network's block spacing, which the platform knows and the crate
+/// does not. Handing over both heights lets the platform do that conversion once, correctly.
+#[derive(uniffi::Record)]
+pub struct VtxoSummary {
+    pub count: u32,
+    pub total_sat: u64,
+    pub soonest_expiry_height: Option<u32>,
+    pub tip_height: u32,
 }
 
 /// The on-chain wallet's balance, split by confirmation state.

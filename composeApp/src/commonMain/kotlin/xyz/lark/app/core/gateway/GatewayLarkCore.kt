@@ -532,14 +532,16 @@ class GatewayLarkCore(
             vtxoTotalSats = vtxos.sumOf { it.amountSat },
             soonestExpiry = soonestExpiryLabel(vtxos, tipHeight),
             lastRefresh = PLACEHOLDER, // barkd 0.4.0 exposes no last-refresh timestamp
-            onChainReserveSats = 0L, // Long-typed by the seam; not exposed — zero, never a fake number
+            // Not exposed by this surface at all, so it is unknown rather than zero — a rendered
+            // "₿0" would claim an empty exit reserve, which is a different statement.
+            onChainReserveSats = null,
             depositAddress = depositAddressCache?.takeIf { it.isNotEmpty() } ?: PLACEHOLDER,
         ),
         network = NetworkStats(
             arkServerStatus = healthFlow.value.display.aspStatus,
             nextRound = PLACEHOLDER, // not directly exposed by barkd 0.4.0
             lightningBridge = PLACEHOLDER, // not exposed
-            chainTip = tipHeight,
+            chainTip = tipHeight.takeIf { it > 0 },
         ),
     )
 

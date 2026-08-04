@@ -135,6 +135,19 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         }
     }
 
+    func vtxoSummary(onResult: @escaping (FfiVtxoSummary?, String?) -> Void) {
+        perform(onResult) { wallet in
+            let summary = try await wallet.vtxoSummary()
+            return FfiVtxoSummary(
+                count: Int32(summary.count),
+                totalSat: Int64(summary.totalSat),
+                // Optional across the boundary: Kotlin sees null, not a sentinel height.
+                soonestExpiryHeight: summary.soonestExpiryHeight.map { KotlinLong(value: Int64($0)) },
+                tipHeight: Int64(summary.tipHeight)
+            )
+        }
+    }
+
     // MARK: - Writes
 
     func refresh(onDone: @escaping (String?) -> Void) {

@@ -100,6 +100,9 @@ interface LarkCoreDelegate {
 
     /** The on-chain balance as of the last [onchainSync]. */
     fun onchainBalance(onResult: (balance: FfiOnchainBalance?, error: String?) -> Unit)
+
+    /** Spendable VTXOs summarised: how many, how much, and when the first one expires. */
+    fun vtxoSummary(onResult: (summary: FfiVtxoSummary?, error: String?) -> Unit)
 }
 
 /**
@@ -143,6 +146,20 @@ data class FfiMovement(
  * [FAILED] and [CANCELED] rows are not part of the money timeline and the mappers drop them.
  */
 enum class FfiMovementState { PENDING, SUCCESSFUL, FAILED, CANCELED }
+
+/**
+ * The wallet's spendable VTXOs, summarised.
+ *
+ * [soonestExpiryHeight] is null when there are no spendable VTXOs — distinct from a height of zero,
+ * which would read as already-expired. [tipHeight] comes back with it so the countdown is computed
+ * from the same read rather than from a separately-fetched, possibly staler, tip.
+ */
+data class FfiVtxoSummary(
+    val count: Int,
+    val totalSat: Long,
+    val soonestExpiryHeight: Long?,
+    val tipHeight: Long,
+)
 
 /**
  * The on-chain balance, split by what boarding can actually consume.

@@ -126,13 +126,18 @@ fun AdvancedScreen(
     }
 }
 
+/** Em-dash for a stat the active core cannot supply; the screen never invents a number (R9). */
+private const val UNKNOWN = "—"
+
 /** FUNDS: VTXO count/total, expiry, refresh, exit reserve, and the deposit-address cell. */
 @Composable
 private fun FundsGroup(funds: FundsStats) {
     RowGroup {
         StatValueRow(
             label = "VTXOs",
-            value = "${funds.vtxoCount} · ${MoneyFormat.btc(funds.vtxoTotalSats)}",
+            // An unknown count must not render as "0": "0 · ₿29,879" asserts the wallet holds
+            // nothing while showing what it holds, which is worse than saying nothing.
+            value = "${funds.vtxoCount?.toString() ?: UNKNOWN} · ${MoneyFormat.btc(funds.vtxoTotalSats)}",
         )
         RowGroupDivider()
         StatValueRow(label = "Soonest expiry", value = funds.soonestExpiry)
@@ -141,7 +146,7 @@ private fun FundsGroup(funds: FundsStats) {
         RowGroupDivider()
         StatValueRow(
             label = "On-chain (exit reserve)",
-            value = MoneyFormat.btc(funds.onChainReserveSats),
+            value = funds.onChainReserveSats?.let(MoneyFormat::btc) ?: UNKNOWN,
         )
         RowGroupDivider()
         AddressCell(address = funds.depositAddress)
@@ -206,7 +211,10 @@ private fun NetworkGroup(network: NetworkStats, channels: ChannelsModel, dotColo
             StatValueRow(label = row.shortId, value = row.value, subLine = row.expiryLabel)
         }
         RowGroupDivider()
-        StatValueRow(label = "Chain tip", value = MoneyFormat.btc(network.chainTip).removePrefix("₿"))
+        StatValueRow(
+            label = "Chain tip",
+            value = network.chainTip?.let { MoneyFormat.btc(it).removePrefix("₿") } ?: UNKNOWN,
+        )
     }
 }
 
