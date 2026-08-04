@@ -10,7 +10,11 @@ An off-chain output the wallet cryptographically owns, held within the Ark rathe
 VTXOs expire. A wallet that stays offline past its expiry window risks losing the ability to spend them unilaterally, which is why refresh cadence and offline tolerance are treated as safety properties rather than conveniences.
 
 ### Board
-The act of moving on-chain funds into the Ark, producing spendable VTXOs. Boarding is how an otherwise-empty wallet acquires a balance, and the resulting VTXOs become spendable only after confirmation.
+The act of moving on-chain funds into the Ark, producing spendable VTXOs. Boarding is how an otherwise-empty wallet acquires a balance.
+
+A board is an on-chain transaction and pays a miner fee out of the very coins it moves, so the amount boarded is always less than the balance boarded *from* — and asking to board a whole balance as a named amount cannot succeed, because nothing would remain to pay the fee. Boarding a whole balance is therefore the engine's arithmetic to do, not the caller's.
+
+Confirmation is necessary but not sufficient for the funds to become spendable: a confirmed board also has to be **registered** by the wallet, which happens during its periodic upkeep rather than on a balance read. A wallet that only reads its balance can hold a confirmed board indefinitely without ever showing it.
 
 ### Ark server
 The server a wallet must reach to perform Ark operations — minting a receive address and spending among them. It participates in signing, so no local stand-in can substitute for it: operations that need one either reach a real server or honestly fail.
@@ -33,6 +37,23 @@ The asymmetry is the point: a channel the wallet funded itself starts with every
 The distinction between a payment the server has accepted and one that has actually completed. An accepted payment can still fail later, so treating acknowledgement as settlement is what lets a wallet claim money moved when it did not.
 
 Which of the two a given path can prove is a property of that path: some return only a message, while others return a payment handle whose terminal state can be polled. A path that cannot prove settlement is expected to say less, not to guess.
+
+Acknowledgement also carries information the eventual failure reason can lose: because an accepted payment has already been routed, a later terminal reason may describe only the final retry rather than the attempt that actually failed. The accept and the failure are separate facts, and the earlier one can outrank the later one when diagnosing.
+
+### CLTV budget
+The block-height headroom an HTLC carries so that every hop, and the exit path behind an Ark-funded channel, can still resolve in time. The sender computes it from its own view of the chain tip plus the deltas each hop demands.
+
+The floor is higher than on an ordinary Lightning channel: resolving an HTLC after a force-close crosses the channel's exit delays in series before the HTLC's own deadline, so too small a budget lets a counterparty's timeout branch beat the receiver's success branch. A hop that receives an HTLC below the floor is expected to refuse it rather than forward it, and that refusal is the only signal that a sender's budget arithmetic is wrong.
+
+### Application-fed chain view
+The chain height and confirmations an embedded channel node knows only because the wallet hands them to it. The node has no chain source of its own — a deliberate consequence of funding channels from a transaction chain that is never broadcast, since there is nothing on-chain for a node to observe.
+
+The tradeoff is that the node's sense of the present is exactly as fresh as the last feed, and it is used to compute outgoing HTLC deadlines. A view that stops advancing does not announce itself: sends fail as though misrouted, while receives keep working, because a stale height makes an incoming deadline look further away rather than nearer. Distinct from the **chain source**, which is the wallet's own upstream blockchain data provider.
+
+### Bind address versus announce address
+The two addresses a Lightning peer needs, answering different questions: which local sockets it accepts connections on, and what a stranger should dial to reach it. Clients dial the announced address verbatim, so it is the announcement — not the binding — that determines whether a peer is reachable at all.
+
+The two coincide only when the host owns its public address locally. Behind any forwarding layer they must differ, and the public address is typically not bindable there at all, so a deployment that can only express one of the two cannot be made reachable.
 
 ## Verification lanes
 
