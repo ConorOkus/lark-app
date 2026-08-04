@@ -6,7 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -45,7 +45,7 @@ fun GoldPillButton(
     PillSurface(
         onClick = onClick,
         colors = PillColors(background = LarkColors.Gold, pressedBackground = LarkColors.GoldPressed),
-        modifier = modifier.height(height),
+        modifier = modifier.heightIn(min = height),
         enabled = enabled,
     ) {
         Text(text = text, style = LarkTheme.typography.button, color = LarkColors.OnGold)
@@ -65,7 +65,7 @@ fun OutlinePillButton(
         onClick = onClick,
         colors = PillColors(background = Color.Transparent, pressedBackground = LarkColors.SurfacePressed),
         modifier = modifier
-            .height(height)
+            .heightIn(min = height)
             .border(width = 1.dp, color = LarkColors.BorderStrong, shape = CircleShape),
         enabled = enabled,
     ) {
