@@ -59,8 +59,11 @@ background refresh, not a bigger number.
 - **Unilateral exit** (#19) is still a stub. If the server vanished, the exit path a user would need
   is not in the app. That makes the server's continued operation part of the envelope, not a
   fallback: this is a test network, and that trade is acceptable here and nowhere else.
-- **No VTXO expiry display.** The in-process core cannot list VTXOs yet, so Advanced shows an
-  em-dash where the soonest expiry would go. A user cannot currently see their own deadline.
+- **The deadline is visible but passive.** Settings → Advanced now shows the VTXO count and the
+  soonest expiry as a real countdown (`block 3,377,744 · in 20 days`), computed at the network's
+  actual block spacing — so a user *can* see their own deadline, but only if they go looking. The
+  wallet's own warning is still just the "needs a moment" card at the last eighth of the window
+  (~2.6 days). Nothing pushes a notification, and nothing warns on the home screen before that.
 
 ## After changing the parameter
 

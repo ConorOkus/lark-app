@@ -6,6 +6,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -209,6 +210,46 @@ class FfiHostLibraryTest {
                     esplora.unknownPathsRequested,
                     "the endpoint an onchain sync adds beyond wallet creation's three",
                 )
+            }
+        }
+    }
+
+    /**
+     * The VTXO summary is readable on the hermetic lane, and its tip comes from the chain source.
+     *
+     * Worth pinning here rather than only on a device: the summary feeds the Advanced screen's
+     * expiry countdown, which is the only place a user can see the deadline past which the server
+     * may sweep their funds. A fresh wallet's answers are all knowable without an Ark server —
+     * no VTXOs, nothing owed, and a tip that must equal what the stub served.
+     *
+     * `soonestExpiryHeight` being null rather than 0 is the load-bearing assertion: a zero height
+     * would render as "expired" against any real tip, which is the opposite of "nothing to expire".
+     */
+    @Test
+    fun theVtxoSummaryReadsCleanlyOnAFreshWallet() = runBlocking {
+        requireHostLibrary()
+        StubEsplora.start().use { esplora ->
+            withDatadir { datadir ->
+                uniffi.lark_ffi.openWallet(
+                    datadir = datadir.absolutePath,
+                    network = "signet",
+                    arkServer = UNREACHABLE_ARK_SERVER,
+                    esplora = esplora.baseUrl,
+                    words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT),
+                ).use { wallet ->
+                    val summary = wallet.vtxoSummary()
+                    assertEquals(0u, summary.count, "a fresh wallet owns no VTXOs")
+                    assertEquals(0uL, summary.totalSat, "and so holds nothing in them")
+                    assertNull(
+                        summary.soonestExpiryHeight,
+                        "no VTXOs means no deadline — which is not a deadline of zero",
+                    )
+                    assertEquals(
+                        StubEsplora.TIP_HEIGHT.toUInt(),
+                        summary.tipHeight,
+                        "the tip is read from the chain source, not invented",
+                    )
+                }
             }
         }
     }
