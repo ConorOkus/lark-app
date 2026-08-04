@@ -1,6 +1,5 @@
 package xyz.lark.app.ui.screens.onboarding
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,21 +23,24 @@ private val TitleTopPadding = 24.dp
 private val TitleBottomPadding = 8.dp
 private val SubCopyMaxWidth = 300.dp
 private val CardsTopGap = 32.dp
-private val CardGap = 10.dp
 
 private const val SUB_COPY =
     "First deposit takes a few minutes to settle. Everything after that is instant."
 
 /**
  * Onboarding 3 — add money (spec block `data-screen-label="Onboarding — add money"`):
- * back chevron, "Add money." title + settling note, the two funding option cards
- * (both lead into boarding), and a ghost "Later" escape at the bottom.
+ * back chevron, "Add money." title + settling note, the funding option card, and a ghost
+ * "Later" escape at the bottom.
+ *
+ * The spec's second card, "Buy with a card", is deliberately absent: there is no card provider
+ * integrated, so tapping it went straight to the first-deposit settling spinner for a purchase that
+ * had not happened and never would. An affordance that fabricates progress is worse than a missing
+ * one — restore it alongside a real provider, not before.
  */
 @Composable
 fun FundScreen(
     onBack: () -> Unit,
     onMoveBitcoinIn: () -> Unit,
-    onBuyWithCard: () -> Unit,
     onLater: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -66,21 +68,13 @@ fun FundScreen(
             modifier = Modifier.widthIn(max = SubCopyMaxWidth),
         )
         Spacer(modifier = Modifier.height(CardsTopGap))
-        Column(verticalArrangement = Arrangement.spacedBy(CardGap)) {
-            OptionCard(
-                title = "Move bitcoin in",
-                subtitle = "From another wallet or exchange",
-                icon = LarkIcons.ArrowUp,
-                onClick = onMoveBitcoinIn,
-                iconTint = LarkColors.Gold,
-            )
-            OptionCard(
-                title = "Buy with a card",
-                subtitle = "Debit or Apple Pay",
-                icon = LarkIcons.Card,
-                onClick = onBuyWithCard,
-            )
-        }
+        OptionCard(
+            title = "Move bitcoin in",
+            subtitle = "From another wallet or exchange",
+            icon = LarkIcons.ArrowUp,
+            onClick = onMoveBitcoinIn,
+            iconTint = LarkColors.Gold,
+        )
         Spacer(modifier = Modifier.weight(1f))
         GhostButton(
             text = "Later",
