@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lark-app architecture</title>
+<style>
+  :root {
+    --bg: #0e0f12; --panel: #16181d; --line: #2a2d35;
+    --ink: #ece9e2; --dim: #9a97a0; --faint: #5c5a63;
+    --gold: #e3b34c; --green: #4cc98a; --blue: #6aa6e8; --orange: #e8865a; --purple: #a98ae8;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, "SF Pro Text", Segoe UI, sans-serif; margin: 0; padding: 40px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: .02em; }
+  .sub { color: var(--dim); margin: 0 0 32px; max-width: 900px; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .cols { display: grid; grid-template-columns: 1fr 320px; gap: 28px; align-items: start; }
+  @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+
+  .stack { display: flex; flex-direction: column; gap: 0; }
+  .layer { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; position: relative; }
+  .layer + .connector { align-self: center; }
+  .layer h2 { margin: 0 0 2px; font-size: 15px; letter-spacing: .12em; text-transform: uppercase; }
+  .layer .what { color: var(--dim); font-size: 13.5px; margin: 0; }
+  .layer .files { color: var(--faint); font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: 8px; }
+  .connector { color: var(--faint); text-align: center; font-size: 12px; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .connector .arrow { font-size: 18px; color: var(--dim); line-height: .8; }
+  .tag { display: inline-block; font-size: 11px; letter-spacing: .08em; padding: 2px 9px; border-radius: 99px; border: 1px solid; margin-left: 8px; vertical-align: 2px; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 0; }
+  .split .layer { border-radius: 14px; }
+  .fork-note { grid-column: 1 / -1; }
+
+  .seam { border-color: var(--gold); }
+  .seam h2 { color: var(--gold); }
+  .core-demo { border-style: dashed; }
+  .server-stock { border-color: #3d5a7a; }
+  .server-fork { border-color: #7a5a3d; }
+
+  .legend { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; position: sticky; top: 24px; }
+  .legend h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  .legend dl { margin: 0; font-size: 13px; }
+  .legend dt { color: var(--ink); font-weight: 600; margin-top: 12px; }
+  .legend dt:first-child { margin-top: 0; }
+  .legend dd { margin: 2px 0 0; color: var(--dim); }
+  .k { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--purple); }
+  .money { color: var(--green); }
+  .warn { color: var(--orange); }
+
+  .flowrow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; color: var(--dim); }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  .section-label { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--faint); margin: 34px 0 10px; }
+  svg text { font-family: -apple-system, "SF Pro Text", sans-serif; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>lark-app — how the pieces fit</h1>
+  <p class="sub">One rule explains most of it: <b style="color:var(--gold)">everything above the LarkCore seam knows nothing about bitcoin plumbing; everything below it knows nothing about screens.</b> The app is currently a <i>thin client</i> — the wallet (keys, coins, channels) lives inside a barkd daemon it talks to over REST.</p>
+
+  <div class="cols">
+    <div class="stack">
+
+      <div class="layer">
+        <h2 style="color:var(--blue)">UI — Compose Multiplatform <span class="tag" style="border-color:var(--blue);color:var(--blue)">iOS + Android, one codebase</span></h2>
+        <p class="what">22 thin screens (Home, Pay, Get&nbsp;paid, Activity, Settings, Advanced…). They render one immutable <span class="k">AppModel</span> and call intent functions. No logic, no networking, no bitcoin.</p>
+        <div class="files">ui/screens/**, App.kt</div>
+      </div>
+
+      <div class="connector"><span class="arrow">↑&nbsp;&nbsp;↓</span>renders AppModel · calls intents (tap, type, confirm)</div>
+
+      <div class="layer">
+        <h2 style="color:var(--purple)">AppStateMachine <span class="tag" style="border-color:var(--purple);color:var(--purple)">one StateFlow&lt;AppModel&gt;</span></h2>
+        <p class="what">Owns navigation (hand-rolled route stack), keypad state, the backup countdown, hidden-balance masking, formatting. Collects the core's flows (balance, health, wallet-exists, channels) and re-renders the single model the UI shows.</p>
+        <div class="files">state/AppStateMachine.kt · state/AppModel.kt</div>
+      </div>
+
+      <div class="connector"><span class="arrow">↑&nbsp;&nbsp;↓</span>reads StateFlows · calls suspend fun send / createWallet / refresh</div>
+
+      <div class="layer seam">
+        <h2>⚿ &nbsp;LarkCore — THE SEAM</h2>
+        <p class="what">A small Kotlin interface: <span class="k">balanceSats · health · walletExists · channels · activity · receiveCode · send() · refresh() · createWallet()</span>. Screens are provably core-agnostic: the same contract test suite runs against every implementation. Swapping what's below never touches what's above.</p>
+        <div class="files">core/LarkCore.kt — chosen at compile time in CoreSelection.buildCore (CoreConfig)</div>
+        <div class="flowrow">
+          <span class="chip"><b>today:</b> FakeLarkCore (demo) or GatewayLarkCore (real, REST)</span>
+          <span class="chip"><b>M2 plan:</b> lark-ffi — Rust bark+LDK in-process, keys on device</span>
+        </div>
+      </div>
+
+      <div class="split" style="margin-top:10px">
+        <div class="layer core-demo">
+          <h2 style="color:var(--faint)">FakeLarkCore <span class="tag" style="border-color:var(--faint);color:var(--faint)">DEMO</span></h2>
+          <p class="what">In-process pretend wallet. No network, no funds. Drives the design's demo rail; default build flavor.</p>
+        </div>
+        <div class="layer">
+          <h2 style="color:var(--green)">GatewayLarkCore <span class="tag" style="border-color:var(--green);color:var(--green)">GATEWAY</span></h2>
+          <p class="what">The real core. One 15s <b>poll loop</b> (balance, vtxos, history, tip, connected, channels) + long-poll notifications where supported. Health mapping (READY / TIDYING / STALE / OFFLINE), offline backoff, and the <b>R16 identity hard-fail</b>: wrong network or missing channel support → refuses to operate.</p>
+          <div class="files">core/gateway/GatewayLarkCore.kt (~580 lines)</div>
+        </div>
+      </div>
+
+      <div class="connector"><span class="arrow">↓</span>typed REST calls, every request through one AuthDecorator seam (NoAuth today; bearer token drops in)</div>
+
+      <div class="layer">
+        <h2 style="color:var(--orange)">BarkdApi <span class="tag" style="border-color:var(--orange);color:var(--orange)">compile-time variant</span></h2>
+        <p class="what"><span class="k">BarkdApiVariant</span> selects which wire surface it speaks; <span class="k">BarkdCapabilities</span> tells the core what exists so it degrades honestly (no mnemonic endpoint → real “words unavailable” notice, no notifications → pure polling, no bip321 → mint address + build URI client-side).</p>
+        <div class="files">core/gateway/BarkdApi.kt · BarkdApiVariant.kt · BarkdDtos.kt — Ktor, specs vendored in docs/gateway/</div>
+      </div>
+
+      <div class="connector"><span class="arrow">↓&nbsp;&nbsp;↓</span>HTTPS (loopback http allowed for local dev)</div>
+
+      <div class="split">
+        <div class="layer server-stock">
+          <h2 style="color:var(--blue)">STOCK_0_4 → Second’s signet</h2>
+          <p class="what"><b>barkd 0.4.0</b> daemon (runs anywhere) holding the wallet <span class="warn">— keys server-side</span>, connected to Second’s public Ark server <span class="k">ark.signet.2nd.dev</span>. Lightning is <i>bridged per-payment by the server’s node</i>: no channels of your own.</p>
+          <div class="files">proven live: create · faucet receive · LN send/receive · refresh round · unilateral exit</div>
+        </div>
+        <div class="layer server-fork">
+          <h2 style="color:var(--gold)">FORK_BETA6 → local mutinynet (LARK)</h2>
+          <p class="what"><b>Greg’s forked barkd</b> (0.1.0-beta.6) + <b>forked captaind with embedded LDK</b>. This is the differentiator: a real <b>LDK Lightning channel funded by an Ark VTXO</b> — instant, fee-less channel opens off-chain, with a trustless on-chain force-close escape hatch.</p>
+          <div class="files">local stack: bitcoind (mutinynet) → postgres → captaind :3535 → barkd alice :3001 / bob :3002 — docs/gateway/local-mutinynet.md</div>
+        </div>
+        <div class="layer fork-note" style="border-style:dashed">
+          <p class="what" style="margin:0"><b class="money">Money lives server-side in both cases.</b> The app displays and instructs; barkd signs and holds. That’s the M1 trade-off — M2 (<span class="k">lark-ffi</span>) moves the wallet into the app process and flips custody to keys-on-device. The gold seam above is what makes that swap a two-file change instead of a rewrite.</p>
+        </div>
+      </div>
+
+      <div class="section-label">Where a payment actually goes (fork stack)</div>
+      <div class="layer">
+        <svg viewBox="0 0 1060 210" width="100%" role="img" aria-label="payment path">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#9a97a0"/>
+            </marker>
+          </defs>
+          <g font-size="13" fill="#ece9e2">
+            <rect x="10"  y="70" width="150" height="56" rx="10" fill="#16181d" stroke="#6aa6e8"/>
+            <text x="85"  y="94" text-anchor="middle">Pay screen</text>
+            <text x="85"  y="112" text-anchor="middle" fill="#9a97a0" font-size="11">₿10,000 → invoice</text>
+
+            <rect x="220" y="70" width="170" height="56" rx="10" fill="#16181d" stroke="#a98ae8"/>
+            <text x="305" y="94" text-anchor="middle">AppStateMachine</text>
+            <text x="305" y="112" text-anchor="middle" fill="#9a97a0" font-size="11">confirmSend()</text>
+
+            <rect x="450" y="70" width="180" height="56" rx="10" fill="#16181d" stroke="#e3b34c"/>
+            <text x="540" y="94" text-anchor="middle">GatewayLarkCore</text>
+            <text x="540" y="112" text-anchor="middle" fill="#9a97a0" font-size="11">guards: online · ≤ balance</text>
+
+            <rect x="690" y="70" width="150" height="56" rx="10" fill="#16181d" stroke="#e8865a"/>
+            <text x="765" y="94" text-anchor="middle">BarkdApi</text>
+            <text x="765" y="112" text-anchor="middle" fill="#9a97a0" font-size="11">POST /wallet/send</text>
+
+            <rect x="900" y="14" width="150" height="52" rx="10" fill="#16181d" stroke="#7a5a3d"/>
+            <text x="975" y="36" text-anchor="middle">barkd</text>
+            <text x="975" y="54" text-anchor="middle" fill="#9a97a0" font-size="11">signs · owns keys</text>
+
+            <rect x="900" y="86" width="150" height="52" rx="10" fill="#16181d" stroke="#7a5a3d"/>
+            <text x="975" y="108" text-anchor="middle">captaind + LDK</text>
+            <text x="975" y="126" text-anchor="middle" fill="#9a97a0" font-size="11">Ark rounds · channels</text>
+
+            <rect x="900" y="158" width="150" height="42" rx="10" fill="#16181d" stroke="#2a2d35"/>
+            <text x="975" y="184" text-anchor="middle" fill="#9a97a0" font-size="12">bitcoin (mutinynet)</text>
+
+            <line x1="160" y1="98" x2="216" y2="98" stroke="#9a97a0" marker-end="url(#a)"/>
+            <line x1="390" y1="98" x2="446" y2="98" stroke="#9a97a0" marker-end="url(#a)"/>
+            <line x1="630" y1="98" x2="686" y2="98" stroke="#9a97a0" marker-end="url(#a)"/>
+            <line x1="840" y1="88" x2="896" y2="48"  stroke="#9a97a0" marker-end="url(#a)"/>
+            <line x1="975" y1="66" x2="975" y2="82"  stroke="#9a97a0" marker-end="url(#a)"/>
+            <line x1="975" y1="138" x2="975" y2="154" stroke="#9a97a0" marker-end="url(#a)"/>
+            <text x="500" y="160" fill="#5c5a63" font-size="12">the debit is never applied locally — the next poll cycle reads the new balance back from the daemon</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <aside class="legend">
+      <h3>Cheat sheet</h3>
+      <dl>
+        <dt>Why a seam?</dt>
+        <dd>Three wallets, one app: demo (fake), thin client (REST → barkd), and the future in-process Rust core. The interface is the only thing all three share.</dd>
+        <dt>Why compile-time variants?</dt>
+        <dd>The two barkd surfaces (stock 0.4.0 vs the LARK fork) differ in routes, shapes, and abilities. <span class="k">CoreConfig</span> picks mode + variant + URLs per build — no runtime probing of a fragile daemon.</dd>
+        <dt>Why is the fork special?</dt>
+        <dd>Only the forked captaind runs the channel bridge: LDK channels whose funding output is an Ark VTXO. Stock Ark bridges Lightning per-payment through the server instead.</dd>
+        <dt>Health, in one line</dt>
+        <dd>READY (all good) · TIDYING (round in flight, shows as Ready) · STALE (VTXO expiry near — “needs a moment”) · OFFLINE (unreachable / wrong identity / auth).</dd>
+        <dt>Trust model today</dt>
+        <dd class="warn">The gateway holds the seed. Fine for dev/testers on test networks; M2 flips it.</dd>
+        <dt>Testing model</dt>
+        <dd>A scriptable mock daemon (GatewayTestHarness) + fixtures spec-pinned to the vendored OpenAPI of each surface; 244 tests. The live stack is a smoke pass, never CI.</dd>
+      </dl>
+    </aside>
+  </div>
+</div>
+</body>
+</html>
