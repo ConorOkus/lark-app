@@ -30,10 +30,23 @@ Sanity numbers for a good build: ~62 MB `.app`, `arm64` only, `CFBundleIcons` pr
 
 ## One-time setup (needs the Apple account)
 
-1. **Apple Developer Program membership.** The machine currently has only an *Apple Development*
-   certificate for individual team `2LD486V4AU` — no distribution certificate and no provisioning
-   profiles. A paid membership is what lets Xcode create the distribution certificate that
-   `CODE_SIGN_STYLE: Automatic` expects at archive time.
+1. **A distribution certificate, created once from the Xcode UI.** This is the real gate, and it has
+   to be done interactively at least once — measured, not assumed:
+
+   - The machine has only an *Apple Development* identity. With no distribution certificate present,
+     `xcodebuild archive` does not fail; it quietly signs with
+     `Apple Development: Conor Okus` and `iOS Team Provisioning Profile: *`. The archive succeeds and
+     then `-exportArchive -exportOptionsPlist … app-store-connect` cannot produce an App Store ipa,
+     because that needs an *Apple Distribution* identity.
+   - `-allowProvisioningUpdates` does not rescue a headless run: it needs an authenticated Apple ID
+     session and **blocks indefinitely** (observed: 12 minutes at 0% CPU, no output) rather than
+     failing, because it cannot show the sign-in prompt.
+   - `codesign` can also block waiting for keychain authorisation on the private key the first time.
+
+   So: open `iosApp/iosApp.xcodeproj` in Xcode (after `xcodegen generate`), make sure the account is
+   signed in under Settings → Accounts, and run **Product → Archive** once. Xcode creates the
+   distribution certificate and the App Store profile, and grants codesign access to the key. Every
+   later build can then use `scripts/testflight.sh` headlessly.
 2. **An App Store Connect app record** for bundle id `xyz.lark.app`, name and SKU of your choosing.
    The archive will build without it; the upload will not.
 3. **An App Store Connect API key** (Users and Access → Integrations). Download the `.p8` once —
