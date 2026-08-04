@@ -77,6 +77,22 @@ if [ "$(uname)" = "Darwin" ]; then
         echo "error: xcodegen is required on macOS ('brew install xcodegen'), or set SKIP_IOS=1." >&2
         exit 1
     else
+        # The app links the Rust core's XCFramework, which is a build artifact and not in the repo
+        # (216MB of static libraries). Without this the app build fails with a bare
+        # "There is no XCFramework found at ..." — so the per-PR lane builds the one slice it
+        # actually needs: the simulator, in debug, reusing the Rust leg's own artifacts. The full
+        # device+release artifact stays off this lane (KTD-9); what belongs here is the app build.
+        if [ "${SKIP_RUST:-}" = "1" ] && [ ! -d iosApp/Frameworks/lark_ffiFFI.xcframework ]; then
+            echo "error: the iOS app needs iosApp/Frameworks/lark_ffiFFI.xcframework, which the" >&2
+            echo "       skipped Rust leg would have built. Drop SKIP_RUST, run" >&2
+            echo "       scripts/build-xcframework.sh once, or set SKIP_IOS=1." >&2
+            exit 1
+        fi
+        if [ "${SKIP_RUST:-}" != "1" ]; then
+            # Also the Swift-glue drift check, mirroring the committed Kotlin bindings above: the
+            # glue is a committed source file the app compiles, so it must match the crate.
+            FFI_SIM_ONLY=1 FFI_PROFILE=debug FFI_CHECK_GLUE=1 bash scripts/build-xcframework.sh
+        fi
         (
             cd iosApp
             xcodegen generate
