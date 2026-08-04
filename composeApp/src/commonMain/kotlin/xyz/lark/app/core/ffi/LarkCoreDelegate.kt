@@ -47,10 +47,11 @@ interface LarkCoreDelegate {
     /**
      * Open the wallet described by [config], creating it from [words] if it is not there yet.
      *
-     * Creating is slow — the crate fetches the chain genesis, measured at ~75s against real
-     * mutinynet — while re-opening an existing wallet takes a few seconds. Everything else here
-     * requires this to have succeeded first, and an implementation must report calls made before
-     * it does as errors rather than crash.
+     * Measured at ~2s against real mutinynet with a release build of the crate, creating or
+     * opening. It is not instant, though, and the build configuration dominates: the same call takes
+     * over a minute against a debug build, which is why the iOS threading experiment recorded ~75s.
+     * Everything else here requires this to have succeeded first, and an implementation must report
+     * calls made before it does as errors rather than crash.
      */
     fun openWallet(
         config: FfiWalletConfig,

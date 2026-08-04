@@ -50,9 +50,9 @@ private val DEFAULT_POLL_INTERVAL = 15.seconds
  * 1. **Swift cannot implement `suspend`** (KT-38974). Every delegate call is completion-handler
  *    shaped and is lifted back into a suspending seam member here, with `suspendCancellableCoroutine`.
  * 2. **The seam is partly synchronous while the engine is not.** `createWallet` returns immediately
- *    and `receiveCode` is a plain property, but opening a wallet takes over a minute and minting an
- *    address is a server round-trip. So state is cached in fields written only by the poll loop, the
- *    same shape `GatewayLarkCore` uses.
+ *    and `receiveCode` is a plain property, but opening a wallet is a couple of seconds of chain
+ *    work and minting an address is a server round-trip. So state is cached in fields written only by
+ *    the poll loop, the same shape `GatewayLarkCore` uses.
  * 3. **The resting route is decided before any open can finish.** [walletExists] therefore starts
  *    from [LarkSecureStore.walletFileExists] — a synchronous disk check — so a returning user lands
  *    on home immediately instead of seeing welcome flash past.
@@ -171,8 +171,8 @@ class DelegateBackedLarkCore(
      * Adopt the wallet belonging to [words]: store them, then open.
      *
      * The words are stored *before* the open rather than after it succeeds. That is deliberate: the
-     * open can take over a minute and can fail on a flaky network, and a user who has just typed a
-     * 12-word phrase should not have to type it again. A wrong phrase leaves an unopenable wallet
+     * open reaches the network and can fail on a flaky one, and a user who has just typed a 12-word
+     * phrase should not have to type it again. A wrong phrase leaves an unopenable wallet
      * rather than losing anything — the datadir is keyed to the seed and nothing has been spent.
      */
     override suspend fun restoreWallet(words: List<String>): Boolean {

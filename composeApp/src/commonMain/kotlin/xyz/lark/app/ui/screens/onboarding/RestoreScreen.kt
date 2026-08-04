@@ -142,7 +142,7 @@ private fun WordsField(typed: String, onTyped: (String) -> Unit) {
  * nothing at all before anything is typed.
  */
 private fun statusLine(count: Int, plausible: Boolean, failed: Boolean, busy: Boolean): String = when {
-    busy -> "Opening your wallet. This can take a minute."
+    busy -> "Opening your wallet…"
     failed -> "That phrase did not open a wallet. Check the words and the order, then try again."
     count == 0 -> ""
     plausible -> "$count words. Ready."

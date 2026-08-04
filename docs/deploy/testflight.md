@@ -46,9 +46,10 @@ Sanity numbers for a good build: ~62 MB `.app`, `arm64` only, `CFBundleIcons` pr
 ## Things to tell testers
 
 - **It is test money.** mutinynet coins, worth nothing.
-- **First launch is slow.** Creating the wallet takes about 75 seconds against the real chain
-  (opening an existing one takes a few seconds). The onboarding screens are readable during it
-  because the wallet is created when the funding step is entered, not at the end.
+- **First launch takes a moment.** Creating the wallet is a couple of seconds of chain work
+  (measured 1.9s on the simulator against real mutinynet), and it happens when the funding step is
+  entered rather than at the end of onboarding, so it overlaps with reading that screen. Every
+  launch after that re-opens the existing wallet in about the same time.
 - **Write the 12 words down.** There is no cloud backup in this build (M2 U5–U8 is deferred), so
   Settings → Backup is the only copy. Deleting the app without them loses the wallet.
 - **Funding is faucet → deposit → move it in.** "Add money" → "Move bitcoin in" shows an on-chain

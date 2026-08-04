@@ -125,6 +125,12 @@ mutinynet esplora — but that is not the discriminator: the Android control pas
 so the stub can serve a complete wallet creation. The 75s per iOS test is the real esplora, not a
 symptom.
 
+> **The 75s is a debug-build number, not the product's.** `FfiThreadingTests` links
+> `target/aarch64-apple-ios-sim/debug/liblark_ffi.a`, while the app links the release slice out of
+> the XCFramework. The same `openWallet` in the shipped app measures **~1.9s** (logged by
+> `FfiLarkCoreDelegate`). Do not quote 75s as the wallet-open cost — bdk and the crypto are
+> dominated by optimisation level.
+
 **What this changes:** the iOS half of the seam (parent plan U3) is unblocked — the Swift binding
 drives the crate correctly from a detached task, which is the shape an iOS adapter needs. The
 Kotlin adapter stays blocked, but on a much smaller and better-located problem.

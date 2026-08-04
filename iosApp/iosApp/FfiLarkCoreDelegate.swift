@@ -71,6 +71,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         onDone: @escaping (String?) -> Void
     ) {
         Task.detached { [weak self] in
+            // Timed because this is the one call whose duration is a product decision: it gates the
+            // first screen a new user sees, and it differs by more than an order of magnitude
+            // between a debug and a release build of the crate. Worth having in a TestFlight log.
+            let started = Date()
             do {
                 let opened = try await openRustWallet(
                     datadir: config.datadir,
@@ -80,8 +84,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
                     words: words
                 )
                 self?.walletQueue.sync { self?.wallet = opened }
+                NSLog("lark: wallet open took %.1fs", Date().timeIntervalSince(started))
                 onDone(nil)
             } catch {
+                NSLog("lark: wallet open failed after %.1fs: %@", Date().timeIntervalSince(started), "\(error)")
                 onDone("\(error)")
             }
         }
