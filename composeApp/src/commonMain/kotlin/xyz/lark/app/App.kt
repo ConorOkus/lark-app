@@ -109,7 +109,6 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
                 // owns. Without one (demo, gateway) there is nothing to show, so the old
                 // straight-to-settling behaviour stands.
                 onMoveBitcoinIn = if (model.deposit != null) machine::goDeposit else machine::startBoarding,
-                onBuyWithCard = machine::startBoarding,
                 onLater = machine::finishOnboarding,
             )
             Route.DEPOSIT -> model.deposit?.let { deposit -> DepositRoute(deposit, machine) }
