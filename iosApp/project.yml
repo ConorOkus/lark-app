@@ -32,7 +32,7 @@ targets:
         MARKETING_VERSION: 0.1.0
         # Bump for EVERY upload: App Store Connect rejects a build number it has already seen, and
         # this is the value CFBundleVersion is generated from (the literal plist does not win).
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: lark
