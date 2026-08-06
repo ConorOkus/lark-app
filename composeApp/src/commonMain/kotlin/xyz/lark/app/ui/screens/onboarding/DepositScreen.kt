@@ -1,10 +1,8 @@
 package xyz.lark.app.ui.screens.onboarding
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.alexzhirkevich.qrose.rememberQrCodePainter
 import xyz.lark.app.state.DepositModel
-import xyz.lark.app.ui.components.GoldPillButton
 import xyz.lark.app.ui.components.OutlinePillButton
 import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.SurfaceCard
@@ -41,22 +38,24 @@ private val QrSize = 200.dp
 private val AddressTopGap = 18.dp
 private val AddressPadding = 16.dp
 
-/** Gaps inside the pinned bottom block: content -> status -> buttons. */
+/** Gaps inside the pinned bottom block: content -> status -> button. */
 private val StatusTopGap = 20.dp
 private val StatusBottomGap = 14.dp
-private val CtaGap = 10.dp
 
 /** 56dp to match the Get paid screen's pills, which this screen is styled from. */
 private val CtaHeight = 56.dp
 
 /**
- * The on-chain deposit step: an address to send to, what has arrived, and a board CTA.
+ * The deposit step: an address to send to, and what is happening to what has arrived.
  *
- * Net-new, with no block in the design spec — with keys on device the money has to land somewhere the
- * user can see. Styled from the "Get paid" block so it reads as part of the same app.
+ * Net-new, with no block in the design spec — with keys on device the money has to land somewhere
+ * the user can see. Styled from the "Get paid" block so it reads as part of the same app.
  *
- * The two balances are shown separately on purpose: "arrived" and "spendable in Ark" are different
- * facts here, and collapsing them would make the disabled board button look broken.
+ * Opening this screen *is* the user asking for money, so there is nothing further to press: no
+ * check control (the app watches the chain itself) and no confirm (there was never a second
+ * decision to make). Copy stays, because copying an address is a real choice with a real
+ * alternative. What arrived is described in terms of when it can be spent, never in terms of where
+ * it is going — the user is not asked to learn that there are two places their money can live.
  */
 @Composable
 fun DepositScreen(
@@ -92,23 +91,30 @@ fun DepositScreen(
                 modifier = Modifier.padding(top = TitleTopPadding, bottom = TitleBottomPadding),
             )
             Text(
-                text = "An on-chain deposit of at least ${deposit.minBoardLabel}. " +
-                    "It needs a few confirmations before LARK can move it in.",
+                text = "Send at least ${deposit.minLabel}. " +
+                    "It takes a few minutes before you can spend it.",
                 style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 24.sp),
                 color = LarkColors.TextSecondary,
             )
             DepositAddress(address = deposit.address)
         }
-        // The status line stays pinned with the buttons, never scrolling away from them: it is the
-        // reason "Move it in" is enabled or disabled, and a disabled button with its explanation
-        // scrolled off screen reads as broken.
-        Text(
-            text = statusLine(deposit),
-            style = LarkTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 20.sp),
-            color = LarkColors.TextSecondary,
-            modifier = Modifier.padding(top = StatusTopGap, bottom = StatusBottomGap),
+        // Pinned rather than scrolling: once money has arrived this is the only thing on the screen
+        // that has changed, and it must not be somewhere the user has to go looking for it.
+        val arriving = deposit.arriving
+        if (arriving != null) {
+            Text(
+                text = "${arriving.amount} on its way. ${arriving.note}",
+                style = LarkTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 20.sp),
+                color = LarkColors.TextSecondary,
+                modifier = Modifier.padding(top = StatusTopGap, bottom = StatusBottomGap),
+            )
+        }
+        OutlinePillButton(
+            text = deposit.copyLabel,
+            onClick = actions.onCopy,
+            height = CtaHeight,
+            modifier = Modifier.fillMaxWidth(),
         )
-        DepositCtas(deposit = deposit, actions = actions)
     }
 }
 
@@ -116,8 +122,6 @@ fun DepositScreen(
 data class DepositActions(
     val onBack: () -> Unit,
     val onCopy: () -> Unit,
-    val onCheckAgain: () -> Unit,
-    val onBoard: () -> Unit,
 )
 
 /** The QR + address, or an honest waiting line while the wallet is still opening. */
@@ -146,30 +150,6 @@ private fun DepositAddress(address: String) {
 }
 
 @Composable
-private fun DepositCtas(deposit: DepositModel, actions: DepositActions) {
-    Row(horizontalArrangement = Arrangement.spacedBy(CtaGap), modifier = Modifier.fillMaxWidth()) {
-        OutlinePillButton(
-            text = if (deposit.checking) "Checking…" else "Check again",
-            onClick = actions.onCheckAgain,
-            modifier = Modifier.weight(1f),
-            height = CtaHeight,
-        )
-        OutlinePillButton(
-            text = deposit.copyLabel,
-            onClick = actions.onCopy,
-            modifier = Modifier.weight(1f),
-            height = CtaHeight,
-        )
-    }
-    GoldPillButton(
-        text = if (deposit.boarding) "Moving it in…" else "Move it in",
-        onClick = actions.onBoard,
-        modifier = Modifier.padding(top = CtaGap).fillMaxWidth(),
-        enabled = deposit.canBoard && !deposit.boarding,
-    )
-}
-
-@Composable
 private fun DepositQr(painter: Painter) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = QrTopGap),
@@ -186,12 +166,4 @@ private fun DepositQr(painter: Painter) {
                 .size(QrSize),
         )
     }
-}
-
-/** The one status line: what has arrived, and what it is waiting for. */
-private fun statusLine(deposit: DepositModel): String = when {
-    deposit.failed -> "That did not go through. Your money is still on-chain — try again."
-    deposit.canBoard -> "${deposit.confirmedLabel} confirmed and ready to move in."
-    deposit.hasPending -> "${deposit.pendingLabel} arrived, waiting for confirmations."
-    else -> "Nothing has arrived yet."
 }

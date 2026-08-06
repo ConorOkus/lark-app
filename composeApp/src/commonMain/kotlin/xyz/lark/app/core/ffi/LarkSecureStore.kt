@@ -1,8 +1,8 @@
 package xyz.lark.app.core.ffi
 
 /**
- * Where the device keeps the two things the Rust core does not persist for us: the mnemonic, and
- * the fact that the user has written it down (KTD-11).
+ * Where the device keeps the things the Rust core does not persist for us: the mnemonic, the fact
+ * that the user has written it down (KTD-11), and the user's standing request for money to arrive.
  *
  * Implemented by the platform, beside [LarkCoreDelegate]. Every member is synchronous — reading the
  * Keychain is a local call, and making it asynchronous would put a suspension point in the middle
@@ -39,4 +39,16 @@ interface LarkSecureStore {
 
     /** Record that the user has confirmed writing the words down. */
     fun markBackedUp()
+
+    /**
+     * When the user last asked for money to arrive, as epoch millis, or null if never.
+     *
+     * A third device-local fact for the same reason as the backup flag: bark does not persist it,
+     * and it has to survive the app being closed — the deposit it authorises can take hours, and
+     * the user will not sit and watch.
+     */
+    fun loadFundingArmedAt(): Long?
+
+    /** Persist the funding intent, or clear it when [millis] is null. */
+    fun storeFundingArmedAt(millis: Long?)
 }

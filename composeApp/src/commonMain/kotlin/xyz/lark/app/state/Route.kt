@@ -19,7 +19,6 @@ enum class Route(val screenLabel: String) {
      * self-funding a scavenger hunt.
      */
     DEPOSIT("Add money — on-chain deposit"),
-    BOARDING("First deposit settling"),
     RESTORE("Restore"),
     HOME("Home"),
     ACTIVITY("Activity"),
@@ -59,6 +58,5 @@ private val ONBOARDING_ROUTES = setOf(
     Route.HOW_IT_WORKS,
     Route.FUND,
     Route.DEPOSIT,
-    Route.BOARDING,
     Route.RESTORE,
 )

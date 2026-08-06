@@ -3,7 +3,8 @@ import Security
 import ComposeApp
 
 /// The device's copy of the wallet: the mnemonic in the Keychain, the datadir in Application
-/// Support, and the "I wrote it down" flag as a marker file (M2 U4 / KTD-11).
+/// Support, and two marker files — the "I wrote it down" flag and the user's standing request for
+/// money to arrive (M2 U4 / KTD-11).
 ///
 /// Three deliberate choices:
 ///
@@ -21,6 +22,7 @@ final class KeychainSecureStore: LarkSecureStore {
     private let account = "mnemonic"
     private let walletFileName = "wallet.sqlite"
     private let backedUpMarkerName = "backed-up"
+    private let fundingArmedAtMarkerName = "funding-armed-at"
 
     /// `lark/` under Application Support, created on first use.
     var datadir: String {
@@ -80,6 +82,28 @@ final class KeychainSecureStore: LarkSecureStore {
 
     func markBackedUp() {
         FileManager.default.createFile(atPath: datadir + "/" + backedUpMarkerName, contents: Data())
+    }
+
+    /// A marker file again, for the same reasons as the backup flag — but one that carries a value,
+    /// since "when" is the whole point. Absent means the user has never asked for money to arrive;
+    /// unparseable is treated as absent rather than as an epoch-zero intent that never expires.
+    func loadFundingArmedAt() -> KotlinLong? {
+        guard let text = try? String(contentsOfFile: fundingArmedAtPath, encoding: .utf8),
+              let millis = Int64(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return KotlinLong(longLong: millis)
+    }
+
+    func storeFundingArmedAt(millis: KotlinLong?) {
+        guard let millis else {
+            try? FileManager.default.removeItem(atPath: fundingArmedAtPath)
+            return
+        }
+        try? String(millis.int64Value).write(toFile: fundingArmedAtPath, atomically: true, encoding: .utf8)
+    }
+
+    private var fundingArmedAtPath: String {
+        datadir + "/" + fundingArmedAtMarkerName
     }
 }
 

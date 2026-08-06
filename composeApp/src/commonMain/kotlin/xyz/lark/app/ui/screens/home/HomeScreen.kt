@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
+import xyz.lark.app.state.ArrivingModel
 import xyz.lark.app.state.BalanceModel
 import xyz.lark.app.state.HealthModel
 import xyz.lark.app.state.Route
@@ -42,6 +43,8 @@ private val ChipGap = 7.dp
 private val HealthDotSize = 7.dp
 private val SecondaryGap = 12.dp
 private val HideRowGap = 18.dp
+private val ArrivingTopGap = 16.dp
+private val ArrivingNoteGap = 2.dp
 private val HideRowHeight = 44.dp
 
 private const val HIDE_LABEL_ALPHA = 0.4f
@@ -151,9 +154,35 @@ private fun BalanceBlock(
         horizontalAlignment = Alignment.Start,
     ) {
         BalanceAmounts(balance = balance, onToggleUnit = onToggleUnit)
+        ArrivingLine(arriving = balance.arriving)
         Spacer(modifier = Modifier.height(HideRowGap))
         HideShowRow(label = balance.hideLabel, onClick = onToggleBalance)
     }
+}
+
+/**
+ * Money on its way, beneath the balance rather than inside it.
+ *
+ * Home is the screen the user comes back to, so this is what makes a deposit's wait survive them
+ * closing the app — the deposit screen cannot, and a balance that silently reads zero for ten
+ * minutes reads as money lost. Absent entirely when nothing is arriving, so the ordinary Home is
+ * unchanged.
+ */
+@Composable
+private fun ArrivingLine(arriving: ArrivingModel?) {
+    if (arriving == null) return
+    Spacer(modifier = Modifier.height(ArrivingTopGap))
+    Text(
+        text = "${arriving.amount} on its way",
+        style = secondaryMoneyStyle(),
+        color = LarkColors.Gold,
+    )
+    Text(
+        text = arriving.note,
+        style = LarkTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 18.sp),
+        color = LarkColors.TextTertiary,
+        modifier = Modifier.padding(top = ArrivingNoteGap),
+    )
 }
 
 /** The visible primary/secondary pair, or the dimmed hidden dots. */

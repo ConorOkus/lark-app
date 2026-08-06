@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTime::class) // kotlin.time Clock: stdlib-experimental, stable enough for M2
+
 package xyz.lark.app.state
 
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +24,8 @@ import xyz.lark.app.core.model.Contact
 import xyz.lark.app.core.model.HealthState
 import xyz.lark.app.core.model.SendResult
 import xyz.lark.app.core.model.Transaction
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
 
 private const val MAX_DIGITS = 8
@@ -36,11 +40,34 @@ private const val SCAN_SATS = 520L
 private const val HIDDEN_BALANCE = "••••"
 
 /**
- * How long the settling screen keeps working before it stops on its own: ~5 minutes, which covers
- * the three board confirmations mutinynet needs (~90s) plus a round, with room to spare.
+ * How long the user's request for money to arrive stays current: seven days.
+ *
+ * Long because an exchange withdrawal can take hours and the user will close the app; bounded
+ * because an intent expressed once should not authorise a deposit made months later. The figure is
+ * a judgement call, not a measured one — it is a constant precisely so it is cheap to revise.
  */
-private const val BOARD_SETTLE_ATTEMPTS = 15
-private const val BOARD_SETTLE_POLL_MILLIS = 20_000L
+private const val FUNDING_ARM_WINDOW_MILLIS = 7L * 24 * 60 * 60 * 1_000
+
+/** How often the watcher looks while something is on its way. Covers mutinynet's 30s blocks. */
+private const val FUNDING_POLL_ACTIVE_MILLIS = 20_000L
+
+/**
+ * How often the watcher looks while the on-chain wallet is empty.
+ *
+ * The watcher cannot stop entirely while armed — a deposit can land at any moment and nothing else
+ * would notice — but polling a wallet with nothing in it every twenty seconds is a battery tax for
+ * no information. Slower, until something shows up.
+ */
+private const val FUNDING_POLL_IDLE_MILLIS = 120_000L
+
+/**
+ * Consecutive failures before the user is told anything.
+ *
+ * A board can fail because a round was in progress or the server blinked, and both fix themselves.
+ * Reporting the first one teaches the user that the warning means nothing; three in a row does not
+ * happen by chance.
+ */
+private const val BOARD_FAILURES_BEFORE_SURFACING = 3
 
 /**
  * The default reveal-countdown clock: monotonic elapsed millis since machine construction.
@@ -94,12 +121,13 @@ private data class MachineState(
     val receiveCode: String? = null,
     /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
     val pasteFailed: Boolean = false,
-    /** A board is in flight; the deposit screen says so and blocks a second attempt. */
-    val boarding: Boolean = false,
-    /** An on-chain sync is in flight, so "Check again" can show it is doing something. */
-    val checkingDeposit: Boolean = false,
-    /** The last board attempt failed. Cleared when another starts. */
-    val boardFailed: Boolean = false,
+    /**
+     * Consecutive failed attempts to make an arrived deposit spendable.
+     *
+     * A count rather than a flag because one failure is noise and three is a problem, and only a
+     * count can tell them apart. Reset to zero by any success.
+     */
+    val boardFailures: Int = 0,
     /** A words-restore is in flight; the restore screen says so and blocks a second attempt. */
     val restoring: Boolean = false,
     /** The last words-restore did not open a wallet. Cleared when another attempt starts. */
@@ -129,6 +157,14 @@ class AppStateMachine(
      * which is what hides the deposit step rather than showing an address nothing can board.
      */
     private val funding: OnchainFunding? = null,
+    /**
+     * Wall-clock epoch millis, for the one deadline that has to survive the app being closed.
+     *
+     * Separate from [nowMillis], which is monotonic from construction: that is the right clock for
+     * the backup countdown (a device clock change must not lengthen it) and the wrong one for the
+     * funding window, which is measured across process restarts that reset the monotonic origin.
+     */
+    private val wallClockMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
 
     private var state = MachineState(route = restingRoute())
@@ -141,9 +177,13 @@ class AppStateMachine(
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
-    private var boardSettleJob: Job? = null
+    private var fundingWatcherJob: Job? = null
 
     init {
+        // A wallet that already exists may be carrying a deposit the user asked for before they
+        // last closed the app. Nothing else would notice it, so the watcher starts at launch
+        // rather than waiting for the user to revisit the funding screen.
+        startFundingWatcher()
         // The core is the source of truth for wallet facts; a real (push-based) core emits
         // outside our intents, so any emission re-renders the current state. Render is pure
         // and reads the core's current values; StateFlow equality drops no-op re-renders.
@@ -207,57 +247,39 @@ class AppStateMachine(
 
     fun goRestore() = push(Route.RESTORE)
 
-    fun startBoarding() = push(Route.BOARDING)
-
     /**
-     * Shows the on-chain deposit address, and checks the chain once on arrival.
+     * Shows the deposit address — and takes opening this screen as the user asking for money.
      *
-     * The check matters because a tester typically gets here, leaves for a faucet, and comes back:
-     * the on-chain wallet is only synced when something asks it to (bark's maintenance deliberately
-     * does not), so without this the screen would keep saying nothing has arrived.
+     * This is the whole of the user's consent to their deposit becoming spendable. There is no
+     * second confirmation, because there was never a second decision: nobody comes here, sends
+     * bitcoin to the address the app gave them, and then declines to be able to spend it.
+     *
+     * Arming here rather than anywhere broader is what keeps a unilateral exit safe. Exit puts
+     * funds into the same on-chain wallet the watcher reads, so an app that boarded whatever it
+     * found would undo the exit; an app that boards only what the user asked for cannot.
      */
     fun goDeposit() {
         push(Route.DEPOSIT)
-        checkForDeposit()
-    }
-
-    /** Re-reads the chain, so a deposit that has just landed shows up. */
-    fun checkForDeposit() {
-        val funding = funding ?: return
-        if (state.checkingDeposit) return
-        update { it.copy(checkingDeposit = true) }
-        scope.launch {
-            funding.syncOnchain()
-            update { it.copy(checkingDeposit = false) }
-        }
+        funding?.armFunding(wallClockMillis())
+        startFundingWatcher()
     }
 
     /**
-     * Boards everything confirmed, then shows the settling screen.
+     * Begins a unilateral exit, revoking the funding intent first.
      *
-     * The whole balance rather than an amount: this is onboarding money arriving from a faucet, and
-     * there is nothing useful to leave behind on-chain. It also has to be the whole balance —
-     * boarding a named amount equal to the confirmed balance cannot pay its own on-chain fee.
+     * The order matters and is the entire point: exit funds land in the same on-chain wallet the
+     * watcher reads, so the intent has to be gone before they arrive. Clearing it here — rather
+     * than relying on the window having lapsed — is what makes pulling an exit back in impossible
+     * rather than merely unlikely.
      */
-    fun boardConfirmed() {
-        val sats = funding?.confirmedSats ?: 0L
-        val boardable = funding != null && !state.boarding && sats >= funding.minBoardSats
-        if (boardable) {
-            update { it.copy(boarding = true, boardFailed = false) }
-            scope.launch {
-                // Boards the whole balance: the core works out what is left after the on-chain fee,
-                // which is why this passes no amount. See OnchainFunding.boardAll.
-                val boarded = requireNotNull(funding).boardAll()
-                update { it.copy(boarding = false, boardFailed = !boarded) }
-                if (boarded) {
-                    push(Route.BOARDING)
-                    watchBoardSettle()
-                }
-            }
-        }
+    fun startExit() {
+        funding?.disarmFunding()
+        fundingWatcherJob?.cancel()
+        fundingWatcherJob = null
+        go(Route.HOME)
     }
 
-    /** Completing onboarding (settling done, or "Later" on fund) creates the wallet and lands home. */
+    /** Completing onboarding ("Later" on fund, or leaving the deposit screen) lands home. */
     fun finishOnboarding() {
         core.createWallet()
         go(Route.HOME)
@@ -488,29 +510,78 @@ class AppStateMachine(
         if (it.route == Route.SENDING) it.copy(route = route, stack = emptyList()) else it
     }
 
+    // --- Funding ---
+
     /**
-     * Drives a boarded deposit to completion while the settling screen is up.
+     * Whether the user's request for money to arrive is still current.
      *
-     * The screen tells the user "keep LARK open and it will finish here", and this is what makes
-     * that true. A board only becomes a spendable VTXO once its transaction confirms *and* the
-     * wallet registers it, and registration happens inside the engine's maintenance pass — the
-     * balance poll alone reads the database and would spin forever. Leaves for home as soon as
-     * money shows up, gives up quietly after the budget (the skip affordance still works), and
-     * stops if the user navigates away.
+     * Purely a question about the window, with no reference to the balance — deliberately.
+     *
+     * The tempting alternative, "expired *unless* money is sitting there", reads the balance at the
+     * moment the question is asked, which means money arriving long after a request lapsed would
+     * revive it. That is precisely the money nobody asked for. Money that arrives *while* the
+     * request is live is kept safe the other way round: [pollFundingOnce] pushes the deadline
+     * forward for as long as it can see funds, so a deposit under the minimum can sit for weeks
+     * without going quiet, while an empty wallet lets the request lapse on schedule.
      */
-    private fun watchBoardSettle() {
-        boardSettleJob?.cancel()
-        boardSettleJob = scope.launch {
-            repeat(BOARD_SETTLE_ATTEMPTS) {
-                delay(BOARD_SETTLE_POLL_MILLIS)
-                if (state.route != Route.BOARDING) return@launch
-                core.refresh()
-                if (core.balanceSats.value > 0 && state.route == Route.BOARDING) {
-                    go(Route.HOME)
+    private val fundingArmed: Boolean
+        get() {
+            val armedAt = funding?.fundingArmedAtMillis ?: return false
+            return wallClockMillis() - armedAt < FUNDING_ARM_WINDOW_MILLIS
+        }
+
+    /**
+     * The one place that makes an arrived deposit spendable.
+     *
+     * Single call site by design: "does the app ever move money the user did not ask it to" is a
+     * question worth being able to answer by reading one function, and every alternative — a
+     * button, a screen-scoped poll, a convenience helper — reintroduces a second place to audit.
+     *
+     * Runs while armed, syncing the chain (bark's own maintenance deliberately does not) and
+     * boarding whatever has confirmed. Polls briskly while something is on its way and slowly
+     * while the wallet is empty, because an armed wallet with nothing in it still has to notice a
+     * deposit that has not been made yet.
+     */
+    private fun startFundingWatcher() {
+        if (funding == null) return
+        fundingWatcherJob?.cancel()
+        fundingWatcherJob = scope.launch {
+            while (true) {
+                if (!fundingArmed) {
+                    // Erase rather than merely stop. A lapsed request left on disk would spring
+                    // back to life the next time any money appeared on-chain — including funds
+                    // from an exit — because the balance clause above would re-qualify it.
+                    funding.disarmFunding()
                     return@launch
                 }
+                pollFundingOnce()
+                delay(if (funding.onchainSats > 0) FUNDING_POLL_ACTIVE_MILLIS else FUNDING_POLL_IDLE_MILLIS)
             }
         }
+    }
+
+    /**
+     * One watcher tick: see what has arrived, make it spendable if it can be, then let it register.
+     *
+     * The trailing refresh is not optional. A board becomes a spendable VTXO only once its
+     * transaction confirms *and* the wallet registers it, and registration happens inside the
+     * engine's maintenance pass — without this the balance would never move and the pending line
+     * would never clear.
+     */
+    private suspend fun pollFundingOnce() {
+        val funding = funding ?: return
+        funding.syncOnchain()
+        // Money the user is already waiting on keeps their request current. Without this a deposit
+        // stuck under the minimum would go quiet after a week — no board, and no watcher left to
+        // notice the top-up that would have fixed it.
+        if (funding.onchainSats > 0) funding.armFunding(wallClockMillis())
+        if (funding.confirmedSats >= funding.minBoardSats) {
+            // The whole balance, never a named amount: the fee comes out of the same coins, so
+            // asking for exactly the confirmed balance can never succeed. See OnchainFunding.
+            val boarded = funding.boardAll()
+            update { it.copy(boardFailures = if (boarded) 0 else it.boardFailures + 1) }
+        }
+        core.refresh()
     }
 
     // --- Refresh ---
@@ -693,6 +764,34 @@ class AppStateMachine(
             primary = if (s.balanceVisible) primary(sats, s.denomination) else HIDDEN_BALANCE,
             secondary = if (s.balanceVisible) secondary(sats, s.denomination) else HIDDEN_BALANCE,
             unitLabel = if (s.denomination == Denomination.FIAT) "Dollars" else "Bitcoin (₿)",
+            arriving = renderArriving(s, masked = !s.balanceVisible),
+        )
+    }
+
+    /**
+     * What to say about money that has arrived but cannot be spent yet, or null when none has.
+     *
+     * One renderer for both Home and the deposit screen. The three notes are the only places the
+     * app explains this wait, and all three are phrased in terms of spending — never movement,
+     * never a second place money lives.
+     */
+    private fun renderArriving(s: MachineState, masked: Boolean): ArrivingModel? {
+        val funding = funding
+        if (funding == null || funding.onchainSats == 0L) return null
+        val arriving = funding.onchainSats
+        // Only definite when nothing is still confirming: pending funds may yet carry the total
+        // over the minimum, and calling that a shortfall would send the user to top up for nothing.
+        val belowMinimum = funding.pendingSats == 0L && funding.confirmedSats < funding.minBoardSats
+        return ArrivingModel(
+            amount = if (masked) HIDDEN_BALANCE else MoneyFormat.btc(arriving),
+            note = when {
+                s.boardFailures >= BOARD_FAILURES_BEFORE_SURFACING ->
+                    "This is taking longer than it should. LARK is still trying."
+                belowMinimum ->
+                    "You need at least ${MoneyFormat.btc(funding.minBoardSats)} before you can " +
+                        "spend it. Send a little more and it will all come through together."
+                else -> "You will be able to spend this in a few minutes."
+            },
         )
     }
 
@@ -802,25 +901,22 @@ class AppStateMachine(
                 MoneyFormat.signedBtc(tx.sats)
             },
             incoming = tx.sats > 0,
+            pending = tx.pending,
         )
 
     /**
-     * The deposit step, or null when the core cannot board — which is what removes the step from the
-     * funding screen rather than offering an address that leads nowhere.
+     * The deposit step, or null when the core has no on-chain wallet — which is what removes the
+     * step from the funding screen rather than offering an address that leads nowhere.
      */
     private fun renderDeposit(s: MachineState): DepositModel? {
         val funding = funding ?: return null
         return DepositModel(
             address = core.depositAddress,
             copyLabel = if (s.copied) "Copied" else "Copy",
-            confirmedLabel = MoneyFormat.btc(funding.confirmedSats),
-            pendingLabel = MoneyFormat.btc(funding.pendingSats),
-            minBoardLabel = MoneyFormat.btc(funding.minBoardSats),
-            canBoard = funding.confirmedSats >= funding.minBoardSats,
-            hasPending = funding.pendingSats > 0,
-            checking = s.checkingDeposit,
-            boarding = s.boarding,
-            failed = s.boardFailed,
+            minLabel = MoneyFormat.btc(funding.minBoardSats),
+            // Never masked, following the exit screen's precedent: a screen whose whole job is to
+            // report what arrived should not hide it because the home balance is hidden.
+            arriving = renderArriving(s, masked = false),
         )
     }
 

@@ -248,11 +248,16 @@ private fun StatusRow(dotColorHex: String, word: String, onClick: () -> Unit) {
     }
 }
 
-/** The centered version footer: `LARK 0.4.1 · Ark + Lightning · {network}`. */
+/**
+ * The centered version footer: `LARK 0.4.1 · {network}`.
+ *
+ * The protocol names it used to carry moved to Advanced. Settings is an ordinary screen, and
+ * naming the machinery here asks the user to know what an Ark is to read a version string.
+ */
 @Composable
 private fun Footer(networkLabel: String) {
     Text(
-        text = "LARK 0.4.1 · Ark + Lightning · $networkLabel",
+        text = "LARK 0.4.1 · $networkLabel",
         style = LarkTheme.typography.caption,
         color = LarkColors.TextPrimary.copy(alpha = FOOTER_ALPHA),
         textAlign = TextAlign.Center,

@@ -21,6 +21,24 @@ data class BalanceModel(
     val primary: String,
     val secondary: String,
     val unitLabel: String,
+    /** Money on its way, or null when nothing is. See [ArrivingModel]. */
+    val arriving: ArrivingModel?,
+)
+
+/**
+ * Money that has arrived but cannot be spent yet.
+ *
+ * Kept separate from the balance rather than folded into it: a headline figure that included
+ * unspendable funds would leave Pay live over money that cannot pay, which is a worse lie than a
+ * lower number. Shown on Home so the wait survives the user closing the app, and reused verbatim
+ * on the deposit screen so the two surfaces cannot drift into telling different stories.
+ *
+ * [note] says what the user can and cannot do, never where the money is or what is moving —
+ * the whole point is that the user never learns there are two places money can live.
+ */
+data class ArrivingModel(
+    val amount: String,
+    val note: String,
 )
 
 /**
@@ -73,6 +91,8 @@ data class ActivityRowModel(
     val initial: String,
     val amount: String,
     val incoming: Boolean,
+    /** Accepted but not yet complete; the row says so rather than reading as settled. */
+    val pending: Boolean,
 )
 
 /** The selected transaction, shaped for the payment-detail screen. */
@@ -176,24 +196,19 @@ data class AppModel(
 )
 
 /**
- * The on-chain deposit step: where to send money, what has arrived, and whether it can be boarded.
+ * The deposit step: where to send money, and what is happening to what has arrived.
  *
- * [canBoard] is the whole point of splitting confirmed from pending — a deposit that has arrived but
- * not confirmed, or one under the server's minimum, must read as a wait or as "not enough" rather
- * than as a broken button.
+ * No action state left — there is nothing to press. The screen shows an address and, once money
+ * shows up, the same [ArrivingModel] Home is showing, so a user who leaves mid-wait sees one story
+ * rather than two.
  */
 data class DepositModel(
     val address: String,
     /** "Copy" / "Copied", sharing the receive screen's 1.6s flip. */
     val copyLabel: String,
-    val confirmedLabel: String,
-    val pendingLabel: String,
-    val minBoardLabel: String,
-    val canBoard: Boolean,
-    val hasPending: Boolean,
-    val checking: Boolean,
-    val boarding: Boolean,
-    val failed: Boolean,
+    val minLabel: String,
+    /** Money on its way, or null when nothing has arrived yet. */
+    val arriving: ArrivingModel?,
 )
 
 /**
