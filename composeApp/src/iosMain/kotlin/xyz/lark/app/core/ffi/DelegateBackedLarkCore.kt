@@ -171,6 +171,19 @@ class DelegateBackedLarkCore(
      */
     override val minBoardSats: Long = MIN_BOARD_SATS
 
+    /**
+     * Read through to the store on every access rather than cached in a field.
+     *
+     * The value is a small file read, and caching it would mean holding a copy that a future
+     * second reader (a widget, a background refresh) could silently contradict. Correctness over a
+     * saving that does not matter at this call rate.
+     */
+    override val fundingArmedAtMillis: Long? get() = store.loadFundingArmedAt()
+
+    override fun armFunding(atMillis: Long) = store.storeFundingArmedAt(atMillis)
+
+    override fun disarmFunding() = store.storeFundingArmedAt(null)
+
     init {
         // A wallet already on disk is opened without waiting for the user to ask (R3).
         if (walletExistsFlow.value) openExistingWallet()

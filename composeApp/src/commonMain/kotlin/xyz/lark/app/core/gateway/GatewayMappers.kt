@@ -39,8 +39,9 @@ private const val ARK_PARAM = "ark"
 private const val LIGHTNING_PARAM = "lightning"
 
 /** Movements shown in activity; `failed`/`canceled` attempts stay out of the money timeline. */
-private val ACTIVITY_STATUSES = setOf("pending", "successful")
+private const val STATUS_PENDING = "pending"
 private const val STATUS_SUCCESSFUL = "successful"
+private val ACTIVITY_STATUSES = setOf(STATUS_PENDING, STATUS_SUCCESSFUL)
 
 
 /** Mirrors the demo's three recent-payee rows (send screen shows a short list, not a directory). */
@@ -146,6 +147,7 @@ private fun transactionOf(movement: Movement, now: Instant): Transaction {
         whenLabel = relativeTimeLabel(movement.time.createdAt, now),
         sats = sats,
         initial = initialOf(who),
+        pending = movement.status == STATUS_PENDING,
     )
 }
 

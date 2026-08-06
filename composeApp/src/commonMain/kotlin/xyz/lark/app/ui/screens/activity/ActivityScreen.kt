@@ -98,9 +98,11 @@ private fun ActivityRow(row: ActivityRowModel, first: Boolean, onClick: () -> Un
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = row.whenLabel,
+                // A pending row has always been in this list; until now it claimed to have landed.
+                // Saying so where the timestamp goes is the smallest honest correction.
+                text = if (row.pending) "On its way" else row.whenLabel,
                 style = LarkTheme.typography.bodySmall,
-                color = LarkColors.TextTertiary,
+                color = if (row.pending) LarkColors.Gold else LarkColors.TextTertiary,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
@@ -111,7 +113,12 @@ private fun ActivityRow(row: ActivityRowModel, first: Boolean, onClick: () -> Un
                 lineHeight = 16.sp,
                 fontFeatureSettings = TABULAR_NUMERALS,
             ),
-            color = if (row.incoming) LarkColors.Success else LarkColors.TextPrimary,
+            // Pending amounts stay neutral: green reads as "in your balance", which it is not yet.
+            color = when {
+                row.pending -> LarkColors.TextTertiary
+                row.incoming -> LarkColors.Success
+                else -> LarkColors.TextPrimary
+            },
         )
     }
 }

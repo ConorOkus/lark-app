@@ -147,8 +147,6 @@ class AppStateMachineTest {
         assertEquals(Route.HOW_IT_WORKS, m.model.value.route)
         m.goFund()
         assertEquals(Route.FUND, m.model.value.route)
-        m.startBoarding()
-        assertEquals(Route.BOARDING, m.model.value.route)
         m.finishOnboarding()
         assertEquals(Route.HOME, m.model.value.route)
         assertTrue(core.walletExists.value)

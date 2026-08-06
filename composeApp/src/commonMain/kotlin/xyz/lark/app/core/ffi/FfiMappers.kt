@@ -53,6 +53,7 @@ internal fun ffiActivity(orderedMovements: List<FfiMovement>, now: Instant): Lis
             whenLabel = relativeTimeLabel(Instant.fromEpochSeconds(movement.createdAtEpochSeconds), now),
             sats = sats,
             initial = initialOf(who),
+            pending = movement.status == FfiMovementState.PENDING,
         )
     }
 

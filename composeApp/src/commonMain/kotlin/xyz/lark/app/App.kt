@@ -22,7 +22,6 @@ import xyz.lark.app.ui.screens.activity.ActivityScreen
 import xyz.lark.app.ui.screens.activity.TxDetailScreen
 import xyz.lark.app.ui.screens.activity.TxTechScreen
 import xyz.lark.app.ui.screens.home.HomeScreen
-import xyz.lark.app.ui.screens.onboarding.BoardingScreen
 import xyz.lark.app.ui.screens.onboarding.DepositActions
 import xyz.lark.app.ui.screens.onboarding.DepositScreen
 import xyz.lark.app.ui.screens.onboarding.FundScreen
@@ -105,14 +104,12 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             )
             Route.FUND -> FundScreen(
                 onBack = machine::back,
-                // With an on-device core, "move bitcoin in" means an on-chain deposit this wallet
-                // owns. Without one (demo, gateway) there is nothing to show, so the old
-                // straight-to-settling behaviour stands.
-                onMoveBitcoinIn = if (model.deposit != null) machine::goDeposit else machine::startBoarding,
+                // Null for a core with no on-chain wallet (demo, gateway), which hides the card
+                // rather than offering a route to an address that leads nowhere.
+                onMoveBitcoinIn = if (model.deposit != null) machine::goDeposit else null,
                 onLater = machine::finishOnboarding,
             )
             Route.DEPOSIT -> model.deposit?.let { deposit -> DepositRoute(deposit, machine) }
-            Route.BOARDING -> BoardingScreen(onSkip = machine::finishOnboarding)
             Route.RESTORE -> RestoreScreen(
                 onBack = machine::back,
                 onRestore = machine::finishRestore,
@@ -176,8 +173,6 @@ private fun DepositRoute(deposit: DepositModel, machine: AppStateMachine) {
                 clipboard.setText(AnnotatedString(deposit.address))
                 machine.copyCode()
             },
-            onCheckAgain = machine::checkForDeposit,
-            onBoard = machine::boardConfirmed,
         ),
     )
 }
@@ -214,5 +209,5 @@ private fun HealthRoute(model: AppModel, machine: AppStateMachine) = HealthScree
 private fun ExitRoute(model: AppModel, machine: AppStateMachine) = ExitScreen(
     amount = model.exitAmount, // always unmasked: the screen states what moves on-chain (issue #4)
     onBack = machine::back,
-    onStart = { machine.go(Route.HOME) },
+    onStart = machine::startExit,
 )

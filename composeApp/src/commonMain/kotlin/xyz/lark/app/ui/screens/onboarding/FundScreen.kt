@@ -40,7 +40,8 @@ private const val SUB_COPY =
 @Composable
 fun FundScreen(
     onBack: () -> Unit,
-    onMoveBitcoinIn: () -> Unit,
+    /** Null for a core with no on-chain wallet, which hides the card rather than faking a route. */
+    onMoveBitcoinIn: (() -> Unit)?,
     onLater: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -68,13 +69,15 @@ fun FundScreen(
             modifier = Modifier.widthIn(max = SubCopyMaxWidth),
         )
         Spacer(modifier = Modifier.height(CardsTopGap))
-        OptionCard(
-            title = "Move bitcoin in",
-            subtitle = "From another wallet or exchange",
-            icon = LarkIcons.ArrowUp,
-            onClick = onMoveBitcoinIn,
-            iconTint = LarkColors.Gold,
-        )
+        if (onMoveBitcoinIn != null) {
+            OptionCard(
+                title = "Move bitcoin in",
+                subtitle = "From another wallet or exchange",
+                icon = LarkIcons.ArrowUp,
+                onClick = onMoveBitcoinIn,
+                iconTint = LarkColors.Gold,
+            )
+        }
         Spacer(modifier = Modifier.weight(1f))
         GhostButton(
             text = "Later",
