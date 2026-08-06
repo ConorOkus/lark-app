@@ -574,7 +574,14 @@ class AppStateMachine(
         // Money the user is already waiting on keeps their request current. Without this a deposit
         // stuck under the minimum would go quiet after a week — no board, and no watcher left to
         // notice the top-up that would have fixed it.
-        if (funding.onchainSats > 0) funding.armFunding(wallClockMillis())
+        //
+        // Only once the request is half spent, rather than every pass: this is a write to disk, and
+        // a deposit in flight ticks every twenty seconds.
+        val armedAt = funding.fundingArmedAtMillis
+        val now = wallClockMillis()
+        if (funding.onchainSats > 0 && armedAt != null && now - armedAt > FUNDING_ARM_WINDOW_MILLIS / 2) {
+            funding.armFunding(now)
+        }
         if (funding.confirmedSats >= funding.minBoardSats) {
             // The whole balance, never a named amount: the fee comes out of the same coins, so
             // asking for exactly the confirmed balance can never succeed. See OnchainFunding.
