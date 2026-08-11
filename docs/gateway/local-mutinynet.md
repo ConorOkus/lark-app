@@ -161,3 +161,35 @@ payment, keeps the Lightning bridge row at an em-dash, and after the first
 not-initialized answer drops to a slow re-probe instead of failing a request
 every poll cycle. If channel behavior appears to do nothing on a given stack,
 check this before assuming an app bug.
+
+## Running the unilateral exit drill
+
+The drill is the standing proof that a wallet can leave the Ark without the Ark
+server. It walks board → exit → claim → withdraw against a real stack and prints
+each state transition. Run it against a healthy stack first, then again with
+captaind stopped — the second run is the one that matters.
+
+```bash
+cd rust/lark-ffi
+LARK_DRILL_DATADIR=/tmp/exit-drill \
+LARK_DRILL_MNEMONIC="<twelve words>" \
+LARK_DRILL_ESPLORA=https://mutinynet.com/api \
+LARK_DRILL_ARK=https://lark-captaind.fly.dev \
+LARK_DRILL_WITHDRAW=<an address you control> \
+cargo run --bin exit-drill
+```
+
+Then stop captaind and re-run the same command unchanged:
+
+```sh
+fly scale count 0 -a lark-captaind   # and `fly scale count 1` to bring it back
+```
+
+Exit codes are `0` passed, `1` failed, `2` skipped. Skip is its own code because
+a lane that skips quietly reports green while proving nothing — the failure
+recorded in `docs/solutions/test-failures/silently-skipped-test-lane-passes-ci.md`.
+A skip means the drill could not run at all; it never means exit works.
+
+Budget real time. `vtxo_exit_delta` is 144 blocks (~72 minutes at mutinynet's
+30-second target), so a full run cannot finish faster than that no matter how
+healthy the stack is. `LARK_DRILL_BUDGET_MINS` caps the wait, default 300.
