@@ -65,6 +65,9 @@ fn parse_network(s: &str) -> Result<Network, LarkError> {
 /// Open the wallet at `datadir` if it exists, otherwise create it. Creation is
 /// server-free (`force = true`) so first-run onboarding does not require a
 /// reachable Ark server; `onchain_bdk` backs boarding + unilateral exit (R5).
+/// Opening is server-tolerant for the same reason: bark logs a failed Ark
+/// handshake and carries on with no server, which is what lets a unilateral exit
+/// start and finish while captaind is down.
 /// `words` is the BIP-39 mnemonic the platform generated and stored in secure
 /// storage (KTD-11) — the crate never persists it.
 #[uniffi::export(async_runtime = "tokio")]
@@ -97,7 +100,13 @@ pub async fn open_wallet(
         .map_err(LarkError::from)?;
 
     let wallet = if db.read_properties().await.map_err(LarkError::from)?.is_some() {
-        Wallet::open(&mnemonic, db.clone(), config).await.map_err(LarkError::from)?
+        // `open_with_onchain`, not `open`: only the onchain-aware variant calls
+        // `exit.load()`, and without it a unilateral exit that is still in flight is
+        // invisible after the process restarts — the wallet would report no exit and
+        // silently stop advancing one that is already broadcast (U1/R3).
+        Wallet::open_with_onchain(&mnemonic, db.clone(), &onchain, config)
+            .await
+            .map_err(LarkError::from)?
     } else {
         Wallet::create_with_onchain(&mnemonic, network, config, db.clone(), &onchain, true)
             .await
