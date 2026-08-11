@@ -769,6 +769,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -806,6 +812,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_encrypt_state_blob(`ptr`: Pointer,`plaintext`: RustBuffer.ByValue,`version`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_lark_ffi_fn_method_larkwallet_exit_status(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_export_state_blob_plaintext(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_lark_ffi_fn_method_larkwallet_fingerprint(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -818,11 +826,15 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(`ptr`: Pointer,
     ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_progress_exit(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_refresh(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_send_ark(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_send_bolt11(`ptr`: Pointer,`invoice`: RustBuffer.ByValue,`sats`: Long,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_start_exit(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_vtxo_summary(`ptr`: Pointer,
     ): Long
@@ -980,6 +992,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_exit_status(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_fingerprint(
@@ -992,11 +1006,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_progress_exit(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_refresh(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_ark(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_start_exit(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary(
     ): Short
@@ -1029,7 +1047,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_func_generate_mnemonic() != 13454.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lark_ffi_checksum_func_open_wallet() != 26765.toShort()) {
+    if (lib.uniffi_lark_ffi_checksum_func_open_wallet() != 3368.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_func_restore_seed_from_artifact() != 56820.toShort()) {
@@ -1059,6 +1077,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 59105.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext() != 13007.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1077,6 +1098,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync() != 57231.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_progress_exit() != 37008.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1084,6 +1108,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11() != 45122.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_start_exit() != 23644.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary() != 35839.toShort()) {
@@ -1562,6 +1589,14 @@ public interface LarkWalletInterface {
     fun `encryptStateBlob`(`plaintext`: kotlin.ByteArray, `version`: kotlin.ULong): kotlin.ByteArray
     
     /**
+     * Where the wallet's exit stands, without advancing it.
+     *
+     * A local read over persisted state, so it answers with no server and no chain source and is
+     * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     */
+    suspend fun `exitStatus`(): ExitStatusInfo
+    
+    /**
      * A consistent snapshot of the wallet's rusqlite state (no seed — bark
      * persists only the fingerprint, never the mnemonic). Uses SQLite's
      * `VACUUM INTO` so the snapshot is transactionally consistent even while
@@ -1615,6 +1650,20 @@ public interface LarkWalletInterface {
     suspend fun `onchainSync`()
     
     /**
+     * Advance every in-flight exit by one pass, returning where the wallet now stands.
+     *
+     * Callers drive this repeatedly; one call does not finish an exit. Broadcasting, waiting out
+     * the exit delta, and claiming are separate passes, and the middle one is bounded by the
+     * chain rather than by effort.
+     *
+     * Channel VTXO stages stay inert: the library path passes no channel driver, so a channel
+     * exit would park rather than resolve. Nothing on the shipping path holds a channel, and
+     * [`ExitStage::Unsupported`] is how that would surface rather than being mislabelled as
+     * ordinary progress.
+     */
+    suspend fun `progressExit`(): ExitStatusInfo
+    
+    /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
      */
     suspend fun `refresh`()
@@ -1635,6 +1684,20 @@ public interface LarkWalletInterface {
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
      */
     suspend fun `sendBolt11`(`invoice`: kotlin.String, `sats`: kotlin.ULong): kotlin.String
+    
+    /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
+     * partial withdrawal. Needs no Ark server — that is the entire point — so it must not be
+     * gated on one being reachable.
+     *
+     * Starting twice is harmless: bark skips VTXOs it is already exiting. There is no matching
+     * `cancel_exit`, and that absence is the contract: once an exit transaction is in the
+     * mempool it cannot be recalled, so a stop control would promise something the wallet
+     * cannot do.
+     */
+    suspend fun `startExit`()
     
     /**
      * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
@@ -1909,6 +1972,33 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * Where the wallet's exit stands, without advancing it.
+     *
+     * A local read over persisted state, so it answers with no server and no chain source and is
+     * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `exitStatus`() : ExitStatusInfo {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_exit_status(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeExitStatusInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * A consistent snapshot of the wallet's rusqlite state (no seed — bark
      * persists only the fingerprint, never the mnemonic). Uses SQLite's
      * `VACUUM INTO` so the snapshot is transactionally consistent even while
@@ -2060,6 +2150,39 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * Advance every in-flight exit by one pass, returning where the wallet now stands.
+     *
+     * Callers drive this repeatedly; one call does not finish an exit. Broadcasting, waiting out
+     * the exit delta, and claiming are separate passes, and the middle one is bounded by the
+     * chain rather than by effort.
+     *
+     * Channel VTXO stages stay inert: the library path passes no channel driver, so a channel
+     * exit would park rather than resolve. Nothing on the shipping path holds a channel, and
+     * [`ExitStage::Unsupported`] is how that would surface rather than being mislabelled as
+     * ordinary progress.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `progressExit`() : ExitStatusInfo {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_progress_exit(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeExitStatusInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
      */
     @Throws(LarkException::class)
@@ -2140,6 +2263,40 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
+     * partial withdrawal. Needs no Ark server — that is the entire point — so it must not be
+     * gated on one being reachable.
+     *
+     * Starting twice is harmless: bark skips VTXOs it is already exiting. There is no matching
+     * `cancel_exit`, and that absence is the contract: once an exit transaction is in the
+     * mempool it cannot be recalled, so a stop control would promise something the wallet
+     * cannot do.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `startExit`() {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_start_exit(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
      *
      * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
@@ -2207,6 +2364,57 @@ public object FfiConverterTypeLarkWallet: FfiConverter<LarkWallet, Pointer> {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * The wallet's exit, summarised.
+ *
+ * `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
+ * and the caller decides whether repetition means stalled. Keeping the counting out here is
+ * deliberate — a threshold baked into the crate would be a policy the app cannot change.
+ */
+data class ExitStatusInfo (
+    var `stage`: ExitStage, 
+    var `vtxoCount`: kotlin.UInt, 
+    var `claimedCount`: kotlin.UInt, 
+    var `totalSat`: kotlin.ULong, 
+    var `errors`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusInfo> {
+    override fun read(buf: ByteBuffer): ExitStatusInfo {
+        return ExitStatusInfo(
+            FfiConverterTypeExitStage.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ExitStatusInfo) = (
+            FfiConverterTypeExitStage.allocationSize(value.`stage`) +
+            FfiConverterUInt.allocationSize(value.`vtxoCount`) +
+            FfiConverterUInt.allocationSize(value.`claimedCount`) +
+            FfiConverterULong.allocationSize(value.`totalSat`) +
+            FfiConverterSequenceString.allocationSize(value.`errors`)
+    )
+
+    override fun write(value: ExitStatusInfo, buf: ByteBuffer) {
+            FfiConverterTypeExitStage.write(value.`stage`, buf)
+            FfiConverterUInt.write(value.`vtxoCount`, buf)
+            FfiConverterUInt.write(value.`claimedCount`, buf)
+            FfiConverterULong.write(value.`totalSat`, buf)
+            FfiConverterSequenceString.write(value.`errors`, buf)
     }
 }
 
@@ -2393,6 +2601,58 @@ public object FfiConverterTypeVtxoSummary: FfiConverterRustBuffer<VtxoSummary> {
             FfiConverterOptionalUInt.write(value.`soonestExpiryHeight`, buf)
     }
 }
+
+
+
+/**
+ * How far a unilateral exit has got.
+ *
+ * The wallet's stage is the **least advanced** of its exiting VTXOs: a wallet has left the Ark
+ * only when every VTXO has, so one straggler holds the whole wallet in the exiting state. That
+ * is the honest aggregate — reporting the furthest-along VTXO would say "claimed" while money
+ * is still in flight.
+ */
+
+enum class ExitStage {
+    
+    /**
+     * Nothing is exiting.
+     */
+    NONE,
+    START,
+    PROCESSING,
+    AWAITING_DELTA,
+    CLAIMABLE,
+    CLAIM_IN_PROGRESS,
+    CLAIMED,
+    /**
+     * A channel VTXO stage this build cannot resolve, because the library path supplies no
+     * channel driver. Reported as itself rather than mapped onto an ordinary stage: calling a
+     * parked channel exit "processing" would claim progress that is not happening.
+     */
+    UNSUPPORTED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeExitStage: FfiConverterRustBuffer<ExitStage> {
+    override fun read(buf: ByteBuffer) = try {
+        ExitStage.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ExitStage) = 4UL
+
+    override fun write(value: ExitStage, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -2736,6 +2996,9 @@ public object FfiConverterSequenceTypeMovementInfo: FfiConverterRustBuffer<List<
          * Open the wallet at `datadir` if it exists, otherwise create it. Creation is
          * server-free (`force = true`) so first-run onboarding does not require a
          * reachable Ark server; `onchain_bdk` backs boarding + unilateral exit (R5).
+         * Opening is server-tolerant for the same reason: bark logs a failed Ark
+         * handshake and carries on with no server, which is what lets a unilateral exit
+         * start and finish while captaind is down.
          * `words` is the BIP-39 mnemonic the platform generated and stored in secure
          * storage (KTD-11) — the crate never persists it.
          */

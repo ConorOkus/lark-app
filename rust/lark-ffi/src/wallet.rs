@@ -9,12 +9,13 @@
 //! Money-bearing live ops (new_address, both sends, boarding) are exported here
 //! but verified only on the live-captaind lane, never on the per-PR one: bark's
 //! balances and sends require real musig cosigning from a signing server that no
-//! in-process fixture can supply. Unilateral exit and channel management are
-//! still unexported.
+//! in-process fixture can supply. Unilateral exit is exported here and needs no
+//! Ark server at all; channel management is still unexported.
 
 use std::str::FromStr;
 use std::sync::Arc;
 
+use bark::exit::{ExitState, ExitVtxo};
 use bark::persist::sqlite::SqliteClient;
 use bark::movement::PaymentMethod;
 use bark::onchain::{ChainSync, OnchainWallet};
@@ -283,6 +284,63 @@ impl LarkWallet {
         Ok(format!("{pending:?}"))
     }
 
+    /// Begin a unilateral exit for the whole VTXO set.
+    ///
+    /// Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
+    /// partial withdrawal. Needs no Ark server — that is the entire point — so it must not be
+    /// gated on one being reachable.
+    ///
+    /// Starting twice is harmless: bark skips VTXOs it is already exiting. There is no matching
+    /// `cancel_exit`, and that absence is the contract: once an exit transaction is in the
+    /// mempool it cannot be recalled, so a stop control would promise something the wallet
+    /// cannot do.
+    pub async fn start_exit(&self) -> Result<(), LarkError> {
+        self.inner
+            .exit
+            .write()
+            .await
+            .start_exit_for_entire_wallet()
+            .await
+            .map_err(LarkError::from)?;
+        Ok(())
+    }
+
+    /// Advance every in-flight exit by one pass, returning where the wallet now stands.
+    ///
+    /// Callers drive this repeatedly; one call does not finish an exit. Broadcasting, waiting out
+    /// the exit delta, and claiming are separate passes, and the middle one is bounded by the
+    /// chain rather than by effort.
+    ///
+    /// Channel VTXO stages stay inert: the library path passes no channel driver, so a channel
+    /// exit would park rather than resolve. Nothing on the shipping path holds a channel, and
+    /// [`ExitStage::Unsupported`] is how that would surface rather than being mislabelled as
+    /// ordinary progress.
+    pub async fn progress_exit(&self) -> Result<ExitStatusInfo, LarkError> {
+        let mut onchain = self.onchain.lock().await;
+        // Write guard on `exit` while `&self.inner` is passed alongside it: this is bark's own
+        // idiom (`Wallet::sync_exits`), so `progress_exits` does not re-enter the lock.
+        let mut exit = self.inner.exit.write().await;
+        let statuses = exit
+            .progress_exits(&self.inner, &mut *onchain, None)
+            .await
+            .map_err(LarkError::from)?;
+        let errors = statuses
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|s| s.error.map(|e| format!("{}: {e}", s.vtxo_id)))
+            .collect();
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors))
+    }
+
+    /// Where the wallet's exit stands, without advancing it.
+    ///
+    /// A local read over persisted state, so it answers with no server and no chain source and is
+    /// safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+    pub async fn exit_status(&self) -> Result<ExitStatusInfo, LarkError> {
+        let exit = self.inner.exit.read().await;
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new()))
+    }
+
     /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
     ///
     /// Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
@@ -356,6 +414,167 @@ pub struct OnchainBalanceInfo {
     pub confirmed_sat: u64,
     pub pending_sat: u64,
     pub total_sat: u64,
+}
+
+/// How far a unilateral exit has got.
+///
+/// The wallet's stage is the **least advanced** of its exiting VTXOs: a wallet has left the Ark
+/// only when every VTXO has, so one straggler holds the whole wallet in the exiting state. That
+/// is the honest aggregate — reporting the furthest-along VTXO would say "claimed" while money
+/// is still in flight.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStage {
+    /// Nothing is exiting.
+    None,
+    Start,
+    Processing,
+    AwaitingDelta,
+    Claimable,
+    ClaimInProgress,
+    Claimed,
+    /// A channel VTXO stage this build cannot resolve, because the library path supplies no
+    /// channel driver. Reported as itself rather than mapped onto an ordinary stage: calling a
+    /// parked channel exit "processing" would claim progress that is not happening.
+    Unsupported,
+}
+
+impl ExitStage {
+    /// Advancement order, for picking the least advanced. `Unsupported` is excluded — it is not a
+    /// point on this line and is handled before ranking.
+    fn rank(self) -> u8 {
+        match self {
+            ExitStage::None => 0,
+            ExitStage::Start => 1,
+            ExitStage::Processing => 2,
+            ExitStage::AwaitingDelta => 3,
+            ExitStage::Claimable => 4,
+            ExitStage::ClaimInProgress => 5,
+            ExitStage::Claimed => 6,
+            ExitStage::Unsupported => u8::MAX,
+        }
+    }
+
+    /// The wallet's stage across its exiting VTXOs.
+    ///
+    /// Least-advanced wins, so the wallet leaves the exiting state only when every VTXO has been
+    /// claimed. `Unsupported` dominates outright rather than competing on rank: it means a stage
+    /// this build cannot advance at all, which is worth surfacing over any amount of progress
+    /// elsewhere.
+    fn aggregate(stages: &[ExitStage]) -> ExitStage {
+        if stages.is_empty() {
+            ExitStage::None
+        } else if stages.contains(&ExitStage::Unsupported) {
+            ExitStage::Unsupported
+        } else {
+            stages.iter().copied().min_by_key(|s| s.rank()).unwrap_or(ExitStage::None)
+        }
+    }
+}
+
+impl From<&ExitState> for ExitStage {
+    fn from(state: &ExitState) -> Self {
+        match state {
+            ExitState::Start(_) => ExitStage::Start,
+            ExitState::Processing(_) => ExitStage::Processing,
+            ExitState::AwaitingDelta(_) => ExitStage::AwaitingDelta,
+            ExitState::Claimable(_) => ExitStage::Claimable,
+            ExitState::ClaimInProgress(_) => ExitStage::ClaimInProgress,
+            ExitState::Claimed(_) => ExitStage::Claimed,
+            ExitState::ChannelBridgeTx(_)
+            | ExitState::ChannelCommitment(_)
+            | ExitState::ChannelSwept(_) => ExitStage::Unsupported,
+        }
+    }
+}
+
+/// The wallet's exit, summarised.
+///
+/// `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
+/// and the caller decides whether repetition means stalled. Keeping the counting out here is
+/// deliberate — a threshold baked into the crate would be a policy the app cannot change.
+#[derive(uniffi::Record)]
+pub struct ExitStatusInfo {
+    pub stage: ExitStage,
+    pub vtxo_count: u32,
+    pub claimed_count: u32,
+    pub total_sat: u64,
+    pub errors: Vec<String>,
+}
+
+impl ExitStatusInfo {
+    fn summarise(vtxos: &[ExitVtxo], errors: Vec<String>) -> Self {
+        let stages: Vec<ExitStage> = vtxos.iter().map(|v| ExitStage::from(v.state())).collect();
+        ExitStatusInfo {
+            stage: ExitStage::aggregate(&stages),
+            vtxo_count: vtxos.len() as u32,
+            claimed_count: stages.iter().filter(|s| **s == ExitStage::Claimed).count() as u32,
+            total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
+            errors,
+        }
+    }
+}
+
+#[cfg(test)]
+mod exit_stage_tests {
+    use super::ExitStage;
+
+    #[test]
+    fn no_exits_is_none() {
+        assert_eq!(ExitStage::aggregate(&[]), ExitStage::None);
+    }
+
+    #[test]
+    fn the_least_advanced_vtxo_sets_the_wallet_stage() {
+        // The whole point of the aggregate: three VTXOs claimed and one still broadcasting means
+        // the wallet has *not* left the Ark, so reporting Claimed here would be a lie.
+        let stages = [
+            ExitStage::Claimed,
+            ExitStage::Claimed,
+            ExitStage::Processing,
+            ExitStage::Claimed,
+        ];
+        assert_eq!(ExitStage::aggregate(&stages), ExitStage::Processing);
+    }
+
+    #[test]
+    fn every_vtxo_claimed_leaves_the_exiting_state() {
+        let stages = [ExitStage::Claimed, ExitStage::Claimed];
+        assert_eq!(ExitStage::aggregate(&stages), ExitStage::Claimed);
+    }
+
+    #[test]
+    fn an_unadvanceable_channel_stage_dominates_any_progress() {
+        // Ranking would bury this behind Start; it must not, because nothing in this build can
+        // move it forward and the app needs to say so rather than show progress.
+        let stages = [ExitStage::Start, ExitStage::Unsupported, ExitStage::Claimed];
+        assert_eq!(ExitStage::aggregate(&stages), ExitStage::Unsupported);
+    }
+
+    #[test]
+    fn a_single_exit_reports_its_own_stage() {
+        assert_eq!(ExitStage::aggregate(&[ExitStage::AwaitingDelta]), ExitStage::AwaitingDelta);
+    }
+
+    #[test]
+    fn stages_rank_in_advancement_order() {
+        let ordered = [
+            ExitStage::None,
+            ExitStage::Start,
+            ExitStage::Processing,
+            ExitStage::AwaitingDelta,
+            ExitStage::Claimable,
+            ExitStage::ClaimInProgress,
+            ExitStage::Claimed,
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                pair[0].rank() < pair[1].rank(),
+                "{:?} must rank below {:?}",
+                pair[0],
+                pair[1],
+            );
+        }
+    }
 }
 
 /// Where a movement has got to.
