@@ -193,6 +193,33 @@ data class AppModel(
     val restore: RestoreModel,
     /** On-chain deposit state; null when the active core cannot board (demo, gateway). */
     val deposit: DepositModel?,
+    /**
+     * The unilateral exit in flight, or null when the wallet is not exiting.
+     *
+     * Non-null is the whole signal: a wallet that is leaving the Ark cannot send, receive, or
+     * board, so every surface that offers those reads this first. It is not a route — the exit
+     * outlives any screen, and making it one would let the user navigate away from a state they
+     * are still in.
+     */
+    val exiting: ExitingModel?,
+)
+
+/**
+ * A unilateral exit in progress, as the home screen shows it.
+ *
+ * [claimedOf] and [inFlight] are separate because they answer different questions — how much of
+ * the wallet is out, and how much is still in the air — and a user watching a multi-hour exit
+ * wants both.
+ *
+ * [stalled] does not offer a way out, because there is not one. It says the exit is not advancing
+ * and the wallet keeps trying, which is the truth; a control here would imply otherwise.
+ */
+data class ExitingModel(
+    val headline: String,
+    val detail: String,
+    val inFlight: String,
+    val claimedOf: String,
+    val stalled: Boolean,
 )
 
 /**

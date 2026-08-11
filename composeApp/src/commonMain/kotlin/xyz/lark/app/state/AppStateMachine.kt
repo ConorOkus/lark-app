@@ -12,7 +12,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.format.MoneyFormat
 // Pure destination classification, kept beside the resolver and invoice parser it composes so the
 // input screen and the send path cannot disagree about what counts as payable.
@@ -59,6 +62,16 @@ private const val FUNDING_POLL_ACTIVE_MILLIS = 20_000L
  * no information. Slower, until something shows up.
  */
 private const val FUNDING_POLL_IDLE_MILLIS = 120_000L
+
+/**
+ * Seconds between unilateral-exit progress passes.
+ *
+ * Fixed rather than adaptive like the funding watcher's, because an exit has no equivalent of
+ * "nothing has arrived yet" — there is always something in flight. Thirty seconds tracks
+ * mutinynet's block target, which is what actually gates the middle of an exit, and keeps the
+ * three-pass stall threshold meaningful at about a minute and a half rather than half an hour.
+ */
+private const val EXIT_POLL_MILLIS = 30_000L
 
 /**
  * Consecutive failures before the user is told anything.
@@ -122,6 +135,13 @@ private data class MachineState(
     /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
     val pasteFailed: Boolean = false,
     /**
+     * The unilateral exit, if one is running.
+     *
+     * Held in machine state rather than read from the capability during render, because render is
+     * pure and the status only changes on a progress pass — which is a suspending call.
+     */
+    val exit: ExitStatus = ExitStatus.NOT_EXITING,
+    /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
      * A count rather than a flag because one failure is noise and three is a problem, and only a
@@ -147,7 +167,11 @@ private data class MachineState(
  * when absent, demo affordances vanish from the model.
  */
 @Suppress("TooManyFunctions") // one small intent function per prototype interaction, by design
-class AppStateMachine(
+// LongParameterList: every parameter is an injection seam — the core, its two optional
+// capabilities, two clocks with deliberately different semantics, and the scope. Each is
+// substituted independently by tests, so bundling them into a parameter object would exist only to
+// satisfy the threshold while making the common construction (core + scope) read worse.
+class AppStateMachine @Suppress("LongParameterList") constructor(
     private val core: LarkCore,
     private val demo: DemoControls? = null,
     private val scope: CoroutineScope,
@@ -157,6 +181,11 @@ class AppStateMachine(
      * which is what hides the deposit step rather than showing an address nothing can board.
      */
     private val funding: OnchainFunding? = null,
+    /**
+     * Unilateral exit, when the active core can do it. Null for the demo and the gateway, which
+     * is what keeps the exit screen's promise honest on cores that cannot keep it.
+     */
+    private val walletExit: WalletExit? = null,
     /**
      * Wall-clock epoch millis, for the one deadline that has to survive the app being closed.
      *
@@ -178,12 +207,18 @@ class AppStateMachine(
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
     private var fundingWatcherJob: Job? = null
+    private var exitWatcherJob: Job? = null
 
     init {
         // A wallet that already exists may be carrying a deposit the user asked for before they
         // last closed the app. Nothing else would notice it, so the watcher starts at launch
         // rather than waiting for the user to revisit the funding screen.
         startFundingWatcher()
+        // An exit outlives the app that started it: nothing advances one while LARK is closed, so
+        // a wallet reopened mid-exit is carrying a broadcast that still needs claiming. Resuming
+        // at launch — before any screen asks — is what stops that from waiting on the user
+        // remembering to go and look.
+        resumeExitIfInFlight()
         // The core is the source of truth for wallet facts; a real (push-based) core emits
         // outside our intents, so any emission re-renders the current state. Render is pure
         // and reads the core's current values; StateFlow equality drops no-op re-renders.
@@ -260,6 +295,10 @@ class AppStateMachine(
      */
     fun goDeposit() {
         push(Route.DEPOSIT)
+        // Not while leaving. Arming here during an exit would board the exit's own proceeds back
+        // into the wallet they were just pulled out of — the exact undo `startExit` disarms to
+        // prevent, reintroduced by the one screen whose job is to arm.
+        if (state.exit.isExiting) return
         funding?.armFunding(wallClockMillis())
         startFundingWatcher()
     }
@@ -273,10 +312,62 @@ class AppStateMachine(
      * rather than merely unlikely.
      */
     fun startExit() {
+        standDownFunding()
+        go(Route.HOME)
+        val exit = walletExit ?: return
+        exitWatcherJob?.cancel()
+        exitWatcherJob = scope.launch {
+            exit.startExit()
+            driveExit(exit)
+        }
+    }
+
+    /**
+     * Pick up an exit that was already running when the app started.
+     *
+     * Called from `init`, so a wallet reopened mid-exit resumes before any screen asks. The
+     * funding stand-down is repeated here rather than assumed: the exit that armed it may have
+     * been started by a previous process, and the intent it cleared is persisted.
+     */
+    private fun resumeExitIfInFlight() {
+        val exit = walletExit ?: return
+        if (!exit.exitStatus.isExiting) return
+        standDownFunding()
+        exitWatcherJob?.cancel()
+        exitWatcherJob = scope.launch { driveExit(exit) }
+    }
+
+    /**
+     * Drive the exit forward until every VTXO is claimed.
+     *
+     * Its own job rather than a branch of the funding watcher, because the two have opposite
+     * lifecycles — this one runs precisely when that one must not — and sharing a loop would
+     * couple a guard to the thing it guards.
+     *
+     * The loop has no failure exit. A stalled exit keeps being retried and is reported as stalled,
+     * because there is no honest way to leave a state whose transactions cannot be recalled.
+     */
+    private suspend fun driveExit(exit: WalletExit) {
+        update { it.copy(exit = exit.exitStatus) }
+        while (exit.exitStatus.isExiting) {
+            val status = exit.progressExit()
+            update { it.copy(exit = status) }
+            if (!status.isExiting) break
+            delay(EXIT_POLL_MILLIS)
+        }
+    }
+
+    /**
+     * Clear the funding intent and stop the watcher.
+     *
+     * Exit proceeds land in the same on-chain wallet the watcher reads, so an armed intent would
+     * board them straight back into a wallet that is leaving. Erasing the intent — rather than
+     * trusting its window to lapse — is what makes that impossible rather than merely unlikely.
+     */
+    private fun standDownFunding() {
         funding?.disarmFunding()
         fundingWatcherJob?.cancel()
         fundingWatcherJob = null
-        go(Route.HOME)
     }
 
     /** Completing onboarding ("Later" on fund, or leaving the deposit screen) lands home. */
@@ -486,6 +577,9 @@ class AppStateMachine(
 
     /** Runs the confirmed-snapshot send behind the working spinner. */
     private fun startSend() {
+        // A wallet mid-exit has no VTXOs left to spend. Asking the core anyway would surface the
+        // true reason as whatever engine error came back, so the refusal belongs here.
+        if (state.exit.isExiting) return
         push(Route.SENDING)
         workJob?.cancel()
         workJob = scope.launch {
@@ -726,7 +820,46 @@ class AppStateMachine(
             networkLabel = core.networkLabel,
             restore = RestoreModel(busy = s.restoring, failed = s.restoreFailed),
             deposit = renderDeposit(s),
+            exiting = renderExiting(s),
         )
+    }
+
+    /**
+     * The exiting surface, or null when the wallet is not leaving.
+     *
+     * Never masked by the hidden-balance setting, following the exit screen's precedent: a screen
+     * whose whole job is to say what is moving on-chain cannot hide the figure.
+     */
+    private fun renderExiting(s: MachineState): ExitingModel? {
+        val status = s.exit
+        if (!status.isExiting) return null
+        return ExitingModel(
+            headline = "Exiting.",
+            detail = exitDetail(status),
+            inFlight = primary(status.inFlightSats, s.denomination),
+            claimedOf = "${status.claimedCount} of ${status.vtxoCount} claimed",
+            stalled = status.stalled,
+        )
+    }
+
+    /**
+     * What the exit is doing, in the user's terms.
+     *
+     * A stall outranks the stage: "not advancing" is the fact that matters, and showing the stage
+     * it is stuck at as though it were progress would be the misreport the stall signal exists to
+     * prevent.
+     */
+    private fun exitDetail(status: ExitStatus): String = when {
+        status.stalled -> "Not advancing. LARK keeps trying."
+        else -> when (status.stage) {
+            ExitStage.STARTING -> "Preparing to leave the Ark."
+            ExitStage.BROADCASTING -> "Putting your exit on the chain."
+            ExitStage.WAITING_OUT_DELAY -> "Waiting out the exit delay."
+            ExitStage.CLAIMABLE -> "Ready to claim."
+            ExitStage.CLAIMING -> "Claiming your funds."
+            ExitStage.UNSUPPORTED -> "This exit needs a newer version of LARK."
+            ExitStage.NONE, ExitStage.CLAIMED -> ""
+        }
     }
 
     /**
