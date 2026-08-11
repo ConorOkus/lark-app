@@ -775,6 +775,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -823,6 +827,10 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_movements(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_onchain_send(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_onchain_send_fee(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(`ptr`: Pointer,
     ): Long
@@ -1004,6 +1012,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_send(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_send_fee(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_progress_exit(
@@ -1093,6 +1105,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_send() != 24908.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_send_fee() != 30579.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync() != 57231.toShort()) {
@@ -1639,6 +1657,27 @@ public interface LarkWalletInterface {
     suspend fun `onchainBalance`(): OnchainBalanceInfo
     
     /**
+     * Spend on-chain funds to `address`.
+     *
+     * Not exit-specific, and deliberately so: an exit lands its proceeds in this wallet, but so
+     * does a board that never got spent and change from anything else. One send path serves all
+     * of them, which is why exit does not carry a destination of its own.
+     *
+     * The fee rate is the chain source's regular estimate, not a caller choice — see
+     * [`Self::onchain_send_fee`] for showing it first.
+     */
+    suspend fun `onchainSend`(`address`: kotlin.String, `sats`: kotlin.ULong): kotlin.String
+    
+    /**
+     * What [`Self::onchain_send`] would cost, without sending it.
+     *
+     * Builds the same transaction at the same fee rate and reads the fee off it, rather than
+     * estimating from a rate and a guessed size — a quote the user is asked to approve should be
+     * the real number. Nothing is signed and nothing is broadcast.
+     */
+    suspend fun `onchainSendFee`(`address`: kotlin.String, `sats`: kotlin.ULong): OnchainFeeQuote
+    
+    /**
      * Bring the on-chain (bdk) wallet up to date with the chain source.
      *
      * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
@@ -2119,6 +2158,65 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * Spend on-chain funds to `address`.
+     *
+     * Not exit-specific, and deliberately so: an exit lands its proceeds in this wallet, but so
+     * does a board that never got spent and change from anything else. One send path serves all
+     * of them, which is why exit does not carry a destination of its own.
+     *
+     * The fee rate is the chain source's regular estimate, not a caller choice — see
+     * [`Self::onchain_send_fee`] for showing it first.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `onchainSend`(`address`: kotlin.String, `sats`: kotlin.ULong) : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_onchain_send(
+                thisPtr,
+                FfiConverterString.lower(`address`),FfiConverterULong.lower(`sats`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * What [`Self::onchain_send`] would cost, without sending it.
+     *
+     * Builds the same transaction at the same fee rate and reads the fee off it, rather than
+     * estimating from a rate and a guessed size — a quote the user is asked to approve should be
+     * the real number. Nothing is signed and nothing is broadcast.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `onchainSendFee`(`address`: kotlin.String, `sats`: kotlin.ULong) : OnchainFeeQuote {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_onchain_send_fee(
+                thisPtr,
+                FfiConverterString.lower(`address`),FfiConverterULong.lower(`sats`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeOnchainFeeQuote.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * Bring the on-chain (bdk) wallet up to date with the chain source.
      *
      * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
@@ -2520,6 +2618,45 @@ public object FfiConverterTypeOnchainBalanceInfo: FfiConverterRustBuffer<Onchain
     override fun write(value: OnchainBalanceInfo, buf: ByteBuffer) {
             FfiConverterULong.write(value.`confirmedSat`, buf)
             FfiConverterULong.write(value.`pendingSat`, buf)
+            FfiConverterULong.write(value.`totalSat`, buf)
+    }
+}
+
+
+
+/**
+ * What an on-chain send would cost, quoted before it is sent.
+ *
+ * `total_sat` is amount plus fee — the number that actually leaves the wallet — because that is
+ * the figure a user checks against their balance, and making them add two numbers is how
+ * off-by-a-fee surprises happen.
+ */
+data class OnchainFeeQuote (
+    var `feeSat`: kotlin.ULong, 
+    var `totalSat`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeOnchainFeeQuote: FfiConverterRustBuffer<OnchainFeeQuote> {
+    override fun read(buf: ByteBuffer): OnchainFeeQuote {
+        return OnchainFeeQuote(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OnchainFeeQuote) = (
+            FfiConverterULong.allocationSize(value.`feeSat`) +
+            FfiConverterULong.allocationSize(value.`totalSat`)
+    )
+
+    override fun write(value: OnchainFeeQuote, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`feeSat`, buf)
             FfiConverterULong.write(value.`totalSat`, buf)
     }
 }

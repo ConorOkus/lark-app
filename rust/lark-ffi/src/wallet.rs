@@ -20,7 +20,7 @@ use bark::persist::sqlite::SqliteClient;
 use bark::movement::PaymentMethod;
 use bark::onchain::{ChainSync, OnchainWallet};
 use bark::{Config, Wallet};
-use bitcoin::{Amount, Network};
+use bitcoin::{Address, Amount, Network};
 use zeroize::Zeroize;
 
 use crate::backup;
@@ -284,6 +284,53 @@ impl LarkWallet {
         Ok(format!("{pending:?}"))
     }
 
+    /// Spend on-chain funds to `address`.
+    ///
+    /// Not exit-specific, and deliberately so: an exit lands its proceeds in this wallet, but so
+    /// does a board that never got spent and change from anything else. One send path serves all
+    /// of them, which is why exit does not carry a destination of its own.
+    ///
+    /// The fee rate is the chain source's regular estimate, not a caller choice — see
+    /// [`Self::onchain_send_fee`] for showing it first.
+    pub async fn onchain_send(&self, address: String, sats: u64) -> Result<String, LarkError> {
+        let dest = parse_onchain_address(&address, self.inner.chain.network())?;
+        let rate = self.inner.chain.fee_rates().await.regular;
+        let mut onchain = self.onchain.lock().await;
+        let txid = onchain
+            .send(&self.inner.chain, dest, Amount::from_sat(sats), rate)
+            .await
+            .map_err(LarkError::from)?;
+        Ok(txid.to_string())
+    }
+
+    /// What [`Self::onchain_send`] would cost, without sending it.
+    ///
+    /// Builds the same transaction at the same fee rate and reads the fee off it, rather than
+    /// estimating from a rate and a guessed size — a quote the user is asked to approve should be
+    /// the real number. Nothing is signed and nothing is broadcast.
+    pub async fn onchain_send_fee(
+        &self,
+        address: String,
+        sats: u64,
+    ) -> Result<OnchainFeeQuote, LarkError> {
+        let dest = parse_onchain_address(&address, self.inner.chain.network())?;
+        let rate = self.inner.chain.fee_rates().await.regular;
+        let mut onchain = self.onchain.lock().await;
+        let mut builder = onchain.build_tx();
+        builder.add_recipient(dest.script_pubkey(), Amount::from_sat(sats));
+        builder.fee_rate(rate);
+        let psbt = builder
+            .finish()
+            .map_err(|e| LarkError::Wallet { msg: format!("cannot build that send: {e}") })?;
+        let fee = psbt
+            .fee()
+            .map_err(|e| LarkError::Wallet { msg: format!("cannot price that send: {e}") })?;
+        Ok(OnchainFeeQuote {
+            fee_sat: fee.to_sat(),
+            total_sat: fee.to_sat().saturating_add(sats),
+        })
+    }
+
     /// Begin a unilateral exit for the whole VTXO set.
     ///
     /// Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
@@ -416,6 +463,32 @@ pub struct OnchainBalanceInfo {
     pub total_sat: u64,
 }
 
+/// Parse and network-check a destination address.
+///
+/// The network check is not a formality: an address for the wrong network is structurally valid
+/// to the parser, so skipping it turns a wrong-network paste into a broadcast that destroys the
+/// money instead of an error the user can act on.
+///
+/// A free function rather than a method because `#[uniffi::export]` exports every method in the
+/// impl block it decorates, and `bitcoin::Address` has no FFI representation.
+fn parse_onchain_address(address: &str, network: Network) -> Result<Address, LarkError> {
+    Address::from_str(address)
+        .map_err(|_| LarkError::Invalid { msg: "not a valid bitcoin address".into() })?
+        .require_network(network)
+        .map_err(|_| LarkError::Invalid { msg: format!("that address is not valid on {network}") })
+}
+
+/// What an on-chain send would cost, quoted before it is sent.
+///
+/// `total_sat` is amount plus fee — the number that actually leaves the wallet — because that is
+/// the figure a user checks against their balance, and making them add two numbers is how
+/// off-by-a-fee surprises happen.
+#[derive(uniffi::Record)]
+pub struct OnchainFeeQuote {
+    pub fee_sat: u64,
+    pub total_sat: u64,
+}
+
 /// How far a unilateral exit has got.
 ///
 /// The wallet's stage is the **least advanced** of its exiting VTXOs: a wallet has left the Ark
@@ -511,6 +584,40 @@ impl ExitStatusInfo {
             total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
             errors,
         }
+    }
+}
+
+#[cfg(test)]
+mod onchain_address_tests {
+    use super::parse_onchain_address;
+    use crate::LarkError;
+    use bitcoin::Network;
+
+    // BIP-173 example addresses.
+    const SIGNET_ADDRESS: &str = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+    const MAINNET_ADDRESS: &str = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+
+    #[test]
+    fn an_address_for_this_network_parses() {
+        assert!(parse_onchain_address(SIGNET_ADDRESS, Network::Signet).is_ok());
+    }
+
+    #[test]
+    fn an_address_for_another_network_is_refused() {
+        // The whole reason the check exists: this parses fine, it is just money-destroying.
+        let err = parse_onchain_address(MAINNET_ADDRESS, Network::Signet).unwrap_err();
+        assert!(matches!(err, LarkError::Invalid { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn a_malformed_address_is_refused_rather_than_panicking() {
+        let err = parse_onchain_address("not-an-address", Network::Signet).unwrap_err();
+        assert!(matches!(err, LarkError::Invalid { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn an_empty_address_is_refused() {
+        assert!(parse_onchain_address("", Network::Signet).is_err());
     }
 }
 
