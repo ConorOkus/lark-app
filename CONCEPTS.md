@@ -16,6 +16,11 @@ A board is an on-chain transaction and pays a miner fee out of the very coins it
 
 Confirmation is necessary but not sufficient for the funds to become spendable: a confirmed board also has to be **registered** by the wallet, which happens during its periodic upkeep rather than on a balance read. A wallet that only reads its balance can hold a confirmed board indefinitely without ever showing it.
 
+### Exiting
+The state a wallet is in while it leaves the Ark unilaterally — a property of the wallet, not a screen it happens to be showing. An exiting wallet accepts no sends or receives, keeps its funding intent disarmed, and resumes its progress on every app open until every VTXO has been claimed on-chain.
+
+The mode exists because the underlying process outlives any one session: it crosses the exit delta and cannot be completed in a sitting, and nothing runs while the app is closed. Two consequences follow. Leaving the mode is possible only by finishing it — a broadcast transaction cannot be recalled, so an exit that has started has no honest cancel — and an exit that cannot progress therefore holds the wallet indefinitely, reported as stalled and retried rather than abandoned.
+
 ### Ark server
 The server a wallet must reach to perform Ark operations — minting a receive address and spending among them. It participates in signing, so no local stand-in can substitute for it: operations that need one either reach a real server or honestly fail.
 
@@ -64,6 +69,11 @@ Because it must run everywhere, it skips itself when its native library cannot l
 
 ### Live lane
 The opt-in verification lane that runs against real infrastructure, covering the money-bearing behavior the pure-local lane cannot: a funded balance and a successful spend. It is gated off by default and skips visibly rather than passing silently, so a routine run never implies coverage it did not provide.
+
+### Exit drill
+The standing, re-runnable proof that a wallet can leave the Ark without the Ark server: board, exit, claim, withdraw, run end to end with the server deliberately stopped. It is kept rather than discarded after it first passes, because the claim it backs is a public one and the engine behind it is a pinned fork that moves.
+
+The drill is what separates a property that was demonstrated once from a property that stays true. It is the exit-path counterpart to the fork pin's contract suite, so a bark upgrade that breaks unilateral exit fails visibly instead of silently invalidating what the app tells users.
 
 ## Dependencies
 
