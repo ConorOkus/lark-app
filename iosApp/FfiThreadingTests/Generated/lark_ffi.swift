@@ -535,10 +535,30 @@ public protocol LarkWalletProtocol : AnyObject {
     func balanceSats() async throws  -> UInt64
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
     func board(sats: UInt64) async throws  -> String
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+    func boardAll() async throws  -> String
+    
+    /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+    func chainTip() async throws  -> UInt32
     
     /**
      * Decrypt a state blob, returning `(plaintext, version)`. The header
@@ -556,6 +576,14 @@ public protocol LarkWalletProtocol : AnyObject {
      * key is derived and used entirely inside Rust.
      */
     func encryptStateBlob(plaintext: Data, version: UInt64) throws  -> Data
+    
+    /**
+     * Where the wallet's exit stands, without advancing it.
+     *
+     * A local read over persisted state, so it answers with no server and no chain source and is
+     * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     */
+    func exitStatus() async throws  -> ExitStatusInfo
     
     /**
      * A consistent snapshot of the wallet's rusqlite state (no seed — bark
@@ -579,8 +607,71 @@ public protocol LarkWalletProtocol : AnyObject {
     
     /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
+     *
+     * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
+     * and creation time as well as the amounts: an activity row has to say who and when, and a
+     * caller cannot invent either. `intended_balance_sat` is here because a movement that has
+     * not completed has no meaningful effective balance yet — the row shows what was intended
+     * until it settles, which is what the gateway core does with the same distinction.
      */
     func movements() async throws  -> [MovementInfo]
+    
+    /**
+     * The on-chain balance, split by confirmation state. Read-only — call
+     * [`Self::onchain_sync`] first for a current answer.
+     *
+     * Split rather than a single total because the two numbers mean different things to the
+     * caller: a faucet payment shows up in `pending_sat` immediately but cannot be boarded
+     * until it confirms, so "your sats arrived, waiting on confirmations" and "you can board
+     * now" are different states and the UI has to be able to tell them apart.
+     */
+    func onchainBalance() async throws  -> OnchainBalanceInfo
+    
+    /**
+     * Spend on-chain funds to `address`.
+     *
+     * Not exit-specific, and deliberately so: an exit lands its proceeds in this wallet, but so
+     * does a board that never got spent and change from anything else. One send path serves all
+     * of them, which is why exit does not carry a destination of its own.
+     *
+     * The fee rate is the chain source's regular estimate, not a caller choice — see
+     * [`Self::onchain_send_fee`] for showing it first.
+     */
+    func onchainSend(address: String, sats: UInt64) async throws  -> String
+    
+    /**
+     * What [`Self::onchain_send`] would cost, without sending it.
+     *
+     * Builds the same transaction at the same fee rate and reads the fee off it, rather than
+     * estimating from a rate and a guessed size — a quote the user is asked to approve should be
+     * the real number. Nothing is signed and nothing is broadcast.
+     */
+    func onchainSendFee(address: String, sats: UInt64) async throws  -> OnchainFeeQuote
+    
+    /**
+     * Bring the on-chain (bdk) wallet up to date with the chain source.
+     *
+     * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
+     * wallet and explicitly does not touch the bdk one, so a deposit sent to
+     * [`Self::deposit_address`] stays invisible until this runs. This is an incremental sync
+     * (`ChainSync`), not `initial_wallet_scan` — a full rescan costs a gap-limit sweep of the
+     * descriptor and is only needed when adopting an already-used seed.
+     */
+    func onchainSync() async throws 
+    
+    /**
+     * Advance every in-flight exit by one pass, returning where the wallet now stands.
+     *
+     * Callers drive this repeatedly; one call does not finish an exit. Broadcasting, waiting out
+     * the exit delta, and claiming are separate passes, and the middle one is bounded by the
+     * chain rather than by effort.
+     *
+     * Channel VTXO stages stay inert: the library path passes no channel driver, so a channel
+     * exit would park rather than resolve. Nothing on the shipping path holds a channel, and
+     * [`ExitStage::Unsupported`] is how that would surface rather than being mislabelled as
+     * ordinary progress.
+     */
+    func progressExit() async throws  -> ExitStatusInfo
     
     /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
@@ -588,11 +679,52 @@ public protocol LarkWalletProtocol : AnyObject {
     func refresh() async throws 
     
     /**
+     * Pay an Ark address out of round (the seam's `send` for a `tark1…` recipient).
+     *
+     * The counterpart to [`Self::send_bolt11`]: the app's own "Get paid" code is an Ark address,
+     * so without this the wallet cannot pay another lark wallet at all. Out-of-round, so it does
+     * not wait for the next round — but it can leave change VTXOs, which is what
+     * [`Self::refresh`]'s maintenance pass eventually tidies.
+     */
+    func sendArk(address: String, sats: UInt64) async throws  -> String
+    
+    /**
      * Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
      * recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
      */
     func sendBolt11(invoice: String, sats: UInt64) async throws  -> String
+    
+    /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
+     * partial withdrawal. Needs no Ark server — that is the entire point — so it must not be
+     * gated on one being reachable.
+     *
+     * Starting twice is harmless: bark skips VTXOs it is already exiting. There is no matching
+     * `cancel_exit`, and that absence is the contract: once an exit transaction is in the
+     * mempool it cannot be recalled, so a stop control would promise something the wallet
+     * cannot do.
+     */
+    func startExit() async throws 
+    
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+    func vtxoSummary() async throws  -> VtxoSummary
     
 }
 
@@ -672,8 +804,8 @@ open func balanceSats()async throws  -> UInt64 {
 }
     
     /**
-     * Board on-chain funds into the Ark (creates a VTXO). Enables a funded
-     * in-process wallet; the boarded VTXO is spendable after board confirmations.
+     * Board a specific amount into Ark. Callers wanting to move a whole balance want
+     * [`Self::board_all`] instead — see the note there about fees.
      */
 open func board(sats: UInt64)async throws  -> String {
     return
@@ -688,6 +820,56 @@ open func board(sats: UInt64)async throws  -> String {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Board **everything** the on-chain wallet holds into Ark.
+     *
+     * This, not [`Self::board`], is what "move my money in" means — and it is not a convenience
+     * wrapper. Boarding a specific amount equal to the whole confirmed balance always fails: the
+     * board transaction pays an on-chain fee out of the same UTXOs, so there is nothing left to
+     * pay it with. `board_all` computes the boardable amount after fees itself.
+     */
+open func boardAll()async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_board_all(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * The chain tip, read from the chain source.
+     *
+     * Its own export because it is the *network* half of an expiry countdown and has a completely
+     * different cost profile from the local half: this is an uncached HTTP request every time, so a
+     * caller polling a balance every few seconds must not fetch it on that cadence. A tip that is a
+     * minute stale costs nothing against a countdown measured in days.
+     */
+open func chainTip()async throws  -> UInt32 {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_chain_tip(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u32,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u32,
+            freeFunc: ffi_lark_ffi_rust_future_free_u32,
+            liftFunc: FfiConverterUInt32.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -738,6 +920,29 @@ open func encryptStateBlob(plaintext: Data, version: UInt64)throws  -> Data {
 }
     
     /**
+     * Where the wallet's exit stands, without advancing it.
+     *
+     * A local read over persisted state, so it answers with no server and no chain source and is
+     * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     */
+open func exitStatus()async throws  -> ExitStatusInfo {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_exit_status(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeExitStatusInfo.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
      * A consistent snapshot of the wallet's rusqlite state (no seed — bark
      * persists only the fingerprint, never the mnemonic). Uses SQLite's
      * `VACUUM INTO` so the snapshot is transactionally consistent even while
@@ -784,6 +989,12 @@ open func mintAddress()async throws  -> String {
     
     /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
+     *
+     * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
+     * and creation time as well as the amounts: an activity row has to say who and when, and a
+     * caller cannot invent either. `intended_balance_sat` is here because a movement that has
+     * not completed has no meaningful effective balance yet — the row shows what was intended
+     * until it settles, which is what the gateway core does with the same distinction.
      */
 open func movements()async throws  -> [MovementInfo] {
     return
@@ -798,6 +1009,138 @@ open func movements()async throws  -> [MovementInfo] {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeMovementInfo.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * The on-chain balance, split by confirmation state. Read-only — call
+     * [`Self::onchain_sync`] first for a current answer.
+     *
+     * Split rather than a single total because the two numbers mean different things to the
+     * caller: a faucet payment shows up in `pending_sat` immediately but cannot be boarded
+     * until it confirms, so "your sats arrived, waiting on confirmations" and "you can board
+     * now" are different states and the UI has to be able to tell them apart.
+     */
+open func onchainBalance()async throws  -> OnchainBalanceInfo {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeOnchainBalanceInfo.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Spend on-chain funds to `address`.
+     *
+     * Not exit-specific, and deliberately so: an exit lands its proceeds in this wallet, but so
+     * does a board that never got spent and change from anything else. One send path serves all
+     * of them, which is why exit does not carry a destination of its own.
+     *
+     * The fee rate is the chain source's regular estimate, not a caller choice — see
+     * [`Self::onchain_send_fee`] for showing it first.
+     */
+open func onchainSend(address: String, sats: UInt64)async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_onchain_send(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(address),FfiConverterUInt64.lower(sats)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * What [`Self::onchain_send`] would cost, without sending it.
+     *
+     * Builds the same transaction at the same fee rate and reads the fee off it, rather than
+     * estimating from a rate and a guessed size — a quote the user is asked to approve should be
+     * the real number. Nothing is signed and nothing is broadcast.
+     */
+open func onchainSendFee(address: String, sats: UInt64)async throws  -> OnchainFeeQuote {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_onchain_send_fee(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(address),FfiConverterUInt64.lower(sats)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeOnchainFeeQuote.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Bring the on-chain (bdk) wallet up to date with the chain source.
+     *
+     * Separate from [`Self::refresh`] on purpose: `Wallet::maintenance` syncs the *offchain*
+     * wallet and explicitly does not touch the bdk one, so a deposit sent to
+     * [`Self::deposit_address`] stays invisible until this runs. This is an incremental sync
+     * (`ChainSync`), not `initial_wallet_scan` — a full rescan costs a gap-limit sweep of the
+     * descriptor and is only needed when adopting an already-used seed.
+     */
+open func onchainSync()async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_void,
+            completeFunc: ffi_lark_ffi_rust_future_complete_void,
+            freeFunc: ffi_lark_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Advance every in-flight exit by one pass, returning where the wallet now stands.
+     *
+     * Callers drive this repeatedly; one call does not finish an exit. Broadcasting, waiting out
+     * the exit delta, and claiming are separate passes, and the middle one is bounded by the
+     * chain rather than by effort.
+     *
+     * Channel VTXO stages stay inert: the library path passes no channel driver, so a channel
+     * exit would park rather than resolve. Nothing on the shipping path holds a channel, and
+     * [`ExitStage::Unsupported`] is how that would surface rather than being mislabelled as
+     * ordinary progress.
+     */
+open func progressExit()async throws  -> ExitStatusInfo {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_progress_exit(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeExitStatusInfo.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -823,6 +1166,31 @@ open func refresh()async throws  {
 }
     
     /**
+     * Pay an Ark address out of round (the seam's `send` for a `tark1…` recipient).
+     *
+     * The counterpart to [`Self::send_bolt11`]: the app's own "Get paid" code is an Ark address,
+     * so without this the wallet cannot pay another lark wallet at all. Out-of-round, so it does
+     * not wait for the next round — but it can leave change VTXOs, which is what
+     * [`Self::refresh`]'s maintenance pass eventually tidies.
+     */
+open func sendArk(address: String, sats: UInt64)async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_send_ark(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(address),FfiConverterUInt64.lower(sats)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
      * Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
      * recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
      * `sats` sets the amount for an amountless invoice. Returns a short summary.
@@ -840,6 +1208,67 @@ open func sendBolt11(invoice: String, sats: UInt64)async throws  -> String {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Deliberately amount-free and selection-free: exit is the wallet leaving the Ark, not a
+     * partial withdrawal. Needs no Ark server — that is the entire point — so it must not be
+     * gated on one being reachable.
+     *
+     * Starting twice is harmless: bark skips VTXOs it is already exiting. There is no matching
+     * `cancel_exit`, and that absence is the contract: once an exit transaction is in the
+     * mempool it cannot be recalled, so a stop control would promise something the wallet
+     * cannot do.
+     */
+open func startExit()async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_start_exit(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_void,
+            completeFunc: ffi_lark_ffi_rust_future_complete_void,
+            freeFunc: ffi_lark_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * The wallet's spendable VTXOs, summarised — count, total, and the soonest expiry height.
+     *
+     * **Purely local**: reads the wallet database and nothing else, so it answers while offline and
+     * cannot be spoiled by a chain-source blip. That separation is deliberate — an earlier version
+     * fetched the chain tip in the same call, which meant one failed HTTP request nulled a count
+     * that was sitting in sqlite the whole time.
+     *
+     * Expiry comes back as a height, not a countdown: turning it into human time needs the chain
+     * tip ([`Self::chain_tip`]) and the network's block spacing, which the platform knows and the
+     * crate does not.
+     *
+     * `soonest_expiry_height` is None when there are no spendable VTXOs — distinct from a zero
+     * height, which would read as "already expired".
+     */
+open func vtxoSummary()async throws  -> VtxoSummary {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_vtxo_summary(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeVtxoSummary.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -900,21 +1329,130 @@ public func FfiConverterTypeLarkWallet_lower(_ value: LarkWallet) -> UnsafeMutab
 
 
 /**
- * A slim view of a bark `Movement` for the seam's activity list.
+ * The wallet's exit, summarised.
+ *
+ * `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
+ * and the caller decides whether repetition means stalled. Keeping the counting out here is
+ * deliberate — a threshold baked into the crate would be a policy the app cannot change.
  */
-public struct MovementInfo {
-    public var id: UInt32
-    public var status: String
-    public var effectiveBalanceSat: Int64
-    public var offchainFeeSat: UInt64
+public struct ExitStatusInfo {
+    public var stage: ExitStage
+    public var vtxoCount: UInt32
+    public var claimedCount: UInt32
+    public var totalSat: UInt64
+    public var errors: [String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: UInt32, status: String, effectiveBalanceSat: Int64, offchainFeeSat: UInt64) {
+    public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, errors: [String]) {
+        self.stage = stage
+        self.vtxoCount = vtxoCount
+        self.claimedCount = claimedCount
+        self.totalSat = totalSat
+        self.errors = errors
+    }
+}
+
+
+
+extension ExitStatusInfo: Equatable, Hashable {
+    public static func ==(lhs: ExitStatusInfo, rhs: ExitStatusInfo) -> Bool {
+        if lhs.stage != rhs.stage {
+            return false
+        }
+        if lhs.vtxoCount != rhs.vtxoCount {
+            return false
+        }
+        if lhs.claimedCount != rhs.claimedCount {
+            return false
+        }
+        if lhs.totalSat != rhs.totalSat {
+            return false
+        }
+        if lhs.errors != rhs.errors {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(stage)
+        hasher.combine(vtxoCount)
+        hasher.combine(claimedCount)
+        hasher.combine(totalSat)
+        hasher.combine(errors)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExitStatusInfo {
+        return
+            try ExitStatusInfo(
+                stage: FfiConverterTypeExitStage.read(from: &buf), 
+                vtxoCount: FfiConverterUInt32.read(from: &buf), 
+                claimedCount: FfiConverterUInt32.read(from: &buf), 
+                totalSat: FfiConverterUInt64.read(from: &buf), 
+                errors: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ExitStatusInfo, into buf: inout [UInt8]) {
+        FfiConverterTypeExitStage.write(value.stage, into: &buf)
+        FfiConverterUInt32.write(value.vtxoCount, into: &buf)
+        FfiConverterUInt32.write(value.claimedCount, into: &buf)
+        FfiConverterUInt64.write(value.totalSat, into: &buf)
+        FfiConverterSequenceString.write(value.errors, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStatusInfo_lift(_ buf: RustBuffer) throws -> ExitStatusInfo {
+    return try FfiConverterTypeExitStatusInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStatusInfo_lower(_ value: ExitStatusInfo) -> RustBuffer {
+    return FfiConverterTypeExitStatusInfo.lower(value)
+}
+
+
+/**
+ * A slim view of a bark `Movement` for the seam's activity list.
+ *
+ * Signed balances: negative is outbound, positive inbound. Destination strings are whatever the
+ * movement recorded (an Ark address, an on-chain address, a BOLT11 invoice), left unparsed —
+ * deciding what to *show* for one is a presentation concern.
+ */
+public struct MovementInfo {
+    public var id: UInt32
+    public var status: MovementState
+    public var effectiveBalanceSat: Int64
+    public var intendedBalanceSat: Int64
+    public var offchainFeeSat: UInt64
+    public var sentTo: [String]
+    public var receivedOn: [String]
+    public var createdAtEpochSeconds: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: UInt32, status: MovementState, effectiveBalanceSat: Int64, intendedBalanceSat: Int64, offchainFeeSat: UInt64, sentTo: [String], receivedOn: [String], createdAtEpochSeconds: Int64) {
         self.id = id
         self.status = status
         self.effectiveBalanceSat = effectiveBalanceSat
+        self.intendedBalanceSat = intendedBalanceSat
         self.offchainFeeSat = offchainFeeSat
+        self.sentTo = sentTo
+        self.receivedOn = receivedOn
+        self.createdAtEpochSeconds = createdAtEpochSeconds
     }
 }
 
@@ -931,7 +1469,19 @@ extension MovementInfo: Equatable, Hashable {
         if lhs.effectiveBalanceSat != rhs.effectiveBalanceSat {
             return false
         }
+        if lhs.intendedBalanceSat != rhs.intendedBalanceSat {
+            return false
+        }
         if lhs.offchainFeeSat != rhs.offchainFeeSat {
+            return false
+        }
+        if lhs.sentTo != rhs.sentTo {
+            return false
+        }
+        if lhs.receivedOn != rhs.receivedOn {
+            return false
+        }
+        if lhs.createdAtEpochSeconds != rhs.createdAtEpochSeconds {
             return false
         }
         return true
@@ -941,7 +1491,11 @@ extension MovementInfo: Equatable, Hashable {
         hasher.combine(id)
         hasher.combine(status)
         hasher.combine(effectiveBalanceSat)
+        hasher.combine(intendedBalanceSat)
         hasher.combine(offchainFeeSat)
+        hasher.combine(sentTo)
+        hasher.combine(receivedOn)
+        hasher.combine(createdAtEpochSeconds)
     }
 }
 
@@ -954,17 +1508,25 @@ public struct FfiConverterTypeMovementInfo: FfiConverterRustBuffer {
         return
             try MovementInfo(
                 id: FfiConverterUInt32.read(from: &buf), 
-                status: FfiConverterString.read(from: &buf), 
+                status: FfiConverterTypeMovementState.read(from: &buf), 
                 effectiveBalanceSat: FfiConverterInt64.read(from: &buf), 
-                offchainFeeSat: FfiConverterUInt64.read(from: &buf)
+                intendedBalanceSat: FfiConverterInt64.read(from: &buf), 
+                offchainFeeSat: FfiConverterUInt64.read(from: &buf), 
+                sentTo: FfiConverterSequenceString.read(from: &buf), 
+                receivedOn: FfiConverterSequenceString.read(from: &buf), 
+                createdAtEpochSeconds: FfiConverterInt64.read(from: &buf)
         )
     }
 
     public static func write(_ value: MovementInfo, into buf: inout [UInt8]) {
         FfiConverterUInt32.write(value.id, into: &buf)
-        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterTypeMovementState.write(value.status, into: &buf)
         FfiConverterInt64.write(value.effectiveBalanceSat, into: &buf)
+        FfiConverterInt64.write(value.intendedBalanceSat, into: &buf)
         FfiConverterUInt64.write(value.offchainFeeSat, into: &buf)
+        FfiConverterSequenceString.write(value.sentTo, into: &buf)
+        FfiConverterSequenceString.write(value.receivedOn, into: &buf)
+        FfiConverterInt64.write(value.createdAtEpochSeconds, into: &buf)
     }
 }
 
@@ -981,6 +1543,160 @@ public func FfiConverterTypeMovementInfo_lift(_ buf: RustBuffer) throws -> Movem
 #endif
 public func FfiConverterTypeMovementInfo_lower(_ value: MovementInfo) -> RustBuffer {
     return FfiConverterTypeMovementInfo.lower(value)
+}
+
+
+/**
+ * The on-chain wallet's balance, split by confirmation state.
+ *
+ * `confirmed_sat` is what boarding can actually consume; `pending_sat` is what has been seen
+ * but is not yet spendable. `total_sat` is their sum, kept explicit so callers that only want
+ * "did anything arrive" do not have to add.
+ */
+public struct OnchainBalanceInfo {
+    public var confirmedSat: UInt64
+    public var pendingSat: UInt64
+    public var totalSat: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(confirmedSat: UInt64, pendingSat: UInt64, totalSat: UInt64) {
+        self.confirmedSat = confirmedSat
+        self.pendingSat = pendingSat
+        self.totalSat = totalSat
+    }
+}
+
+
+
+extension OnchainBalanceInfo: Equatable, Hashable {
+    public static func ==(lhs: OnchainBalanceInfo, rhs: OnchainBalanceInfo) -> Bool {
+        if lhs.confirmedSat != rhs.confirmedSat {
+            return false
+        }
+        if lhs.pendingSat != rhs.pendingSat {
+            return false
+        }
+        if lhs.totalSat != rhs.totalSat {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(confirmedSat)
+        hasher.combine(pendingSat)
+        hasher.combine(totalSat)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOnchainBalanceInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OnchainBalanceInfo {
+        return
+            try OnchainBalanceInfo(
+                confirmedSat: FfiConverterUInt64.read(from: &buf), 
+                pendingSat: FfiConverterUInt64.read(from: &buf), 
+                totalSat: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OnchainBalanceInfo, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.confirmedSat, into: &buf)
+        FfiConverterUInt64.write(value.pendingSat, into: &buf)
+        FfiConverterUInt64.write(value.totalSat, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainBalanceInfo_lift(_ buf: RustBuffer) throws -> OnchainBalanceInfo {
+    return try FfiConverterTypeOnchainBalanceInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainBalanceInfo_lower(_ value: OnchainBalanceInfo) -> RustBuffer {
+    return FfiConverterTypeOnchainBalanceInfo.lower(value)
+}
+
+
+/**
+ * What an on-chain send would cost, quoted before it is sent.
+ *
+ * `total_sat` is amount plus fee — the number that actually leaves the wallet — because that is
+ * the figure a user checks against their balance, and making them add two numbers is how
+ * off-by-a-fee surprises happen.
+ */
+public struct OnchainFeeQuote {
+    public var feeSat: UInt64
+    public var totalSat: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(feeSat: UInt64, totalSat: UInt64) {
+        self.feeSat = feeSat
+        self.totalSat = totalSat
+    }
+}
+
+
+
+extension OnchainFeeQuote: Equatable, Hashable {
+    public static func ==(lhs: OnchainFeeQuote, rhs: OnchainFeeQuote) -> Bool {
+        if lhs.feeSat != rhs.feeSat {
+            return false
+        }
+        if lhs.totalSat != rhs.totalSat {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(feeSat)
+        hasher.combine(totalSat)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOnchainFeeQuote: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OnchainFeeQuote {
+        return
+            try OnchainFeeQuote(
+                feeSat: FfiConverterUInt64.read(from: &buf), 
+                totalSat: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OnchainFeeQuote, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.feeSat, into: &buf)
+        FfiConverterUInt64.write(value.totalSat, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainFeeQuote_lift(_ buf: RustBuffer) throws -> OnchainFeeQuote {
+    return try FfiConverterTypeOnchainFeeQuote.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOnchainFeeQuote_lower(_ value: OnchainFeeQuote) -> RustBuffer {
+    return FfiConverterTypeOnchainFeeQuote.lower(value)
 }
 
 
@@ -1051,6 +1767,209 @@ public func FfiConverterTypeStateBlobPlaintext_lift(_ buf: RustBuffer) throws ->
 public func FfiConverterTypeStateBlobPlaintext_lower(_ value: StateBlobPlaintext) -> RustBuffer {
     return FfiConverterTypeStateBlobPlaintext.lower(value)
 }
+
+
+/**
+ * A summary of the wallet's spendable VTXOs.
+ *
+ * Heights rather than dates, deliberately: a VTXO expires at a block height, and converting that
+ * to wall-clock time needs both the chain tip and the network's block spacing. The tip is a
+ * separate export ([`LarkWallet::chain_tip`]) precisely so this one stays local and cheap.
+ */
+public struct VtxoSummary {
+    public var count: UInt32
+    public var totalSat: UInt64
+    public var soonestExpiryHeight: UInt32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(count: UInt32, totalSat: UInt64, soonestExpiryHeight: UInt32?) {
+        self.count = count
+        self.totalSat = totalSat
+        self.soonestExpiryHeight = soonestExpiryHeight
+    }
+}
+
+
+
+extension VtxoSummary: Equatable, Hashable {
+    public static func ==(lhs: VtxoSummary, rhs: VtxoSummary) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        if lhs.totalSat != rhs.totalSat {
+            return false
+        }
+        if lhs.soonestExpiryHeight != rhs.soonestExpiryHeight {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(count)
+        hasher.combine(totalSat)
+        hasher.combine(soonestExpiryHeight)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVtxoSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VtxoSummary {
+        return
+            try VtxoSummary(
+                count: FfiConverterUInt32.read(from: &buf), 
+                totalSat: FfiConverterUInt64.read(from: &buf), 
+                soonestExpiryHeight: FfiConverterOptionUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VtxoSummary, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.count, into: &buf)
+        FfiConverterUInt64.write(value.totalSat, into: &buf)
+        FfiConverterOptionUInt32.write(value.soonestExpiryHeight, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVtxoSummary_lift(_ buf: RustBuffer) throws -> VtxoSummary {
+    return try FfiConverterTypeVtxoSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVtxoSummary_lower(_ value: VtxoSummary) -> RustBuffer {
+    return FfiConverterTypeVtxoSummary.lower(value)
+}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * How far a unilateral exit has got.
+ *
+ * The wallet's stage is the **least advanced** of its exiting VTXOs: a wallet has left the Ark
+ * only when every VTXO has, so one straggler holds the whole wallet in the exiting state. That
+ * is the honest aggregate — reporting the furthest-along VTXO would say "claimed" while money
+ * is still in flight.
+ */
+
+public enum ExitStage {
+    
+    /**
+     * Nothing is exiting.
+     */
+    case none
+    case start
+    case processing
+    case awaitingDelta
+    case claimable
+    case claimInProgress
+    case claimed
+    /**
+     * A channel VTXO stage this build cannot resolve, because the library path supplies no
+     * channel driver. Reported as itself rather than mapped onto an ordinary stage: calling a
+     * parked channel exit "processing" would claim progress that is not happening.
+     */
+    case unsupported
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExitStage: FfiConverterRustBuffer {
+    typealias SwiftType = ExitStage
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExitStage {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .none
+        
+        case 2: return .start
+        
+        case 3: return .processing
+        
+        case 4: return .awaitingDelta
+        
+        case 5: return .claimable
+        
+        case 6: return .claimInProgress
+        
+        case 7: return .claimed
+        
+        case 8: return .unsupported
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ExitStage, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .none:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .start:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .processing:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .awaitingDelta:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .claimable:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .claimInProgress:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .claimed:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .unsupported:
+            writeInt(&buf, Int32(8))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStage_lift(_ buf: RustBuffer) throws -> ExitStage {
+    return try FfiConverterTypeExitStage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStage_lower(_ value: ExitStage) -> RustBuffer {
+    return FfiConverterTypeExitStage.lower(value)
+}
+
+
+
+extension ExitStage: Equatable, Hashable {}
+
+
 
 
 /**
@@ -1128,6 +2047,116 @@ extension LarkError: Equatable, Hashable {}
 extension LarkError: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
+    }
+}
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Where a movement has got to.
+ *
+ * A real enum rather than bark's `Debug` string: the platform branches on this to decide whether a
+ * row shows its effective or its intended amount, and a stringly-typed status makes that branch
+ * fail silently — a renamed variant upstream would drop every row from the activity list with
+ * nothing failing to compile. As an enum, the same rename is a build error on both sides.
+ */
+
+public enum MovementState {
+    
+    case pending
+    case successful
+    case failed
+    case canceled
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMovementState: FfiConverterRustBuffer {
+    typealias SwiftType = MovementState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MovementState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .successful
+        
+        case 3: return .failed
+        
+        case 4: return .canceled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MovementState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .successful:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .canceled:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMovementState_lift(_ buf: RustBuffer) throws -> MovementState {
+    return try FfiConverterTypeMovementState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMovementState_lower(_ value: MovementState) -> RustBuffer {
+    return FfiConverterTypeMovementState.lower(value)
+}
+
+
+
+extension MovementState: Equatable, Hashable {}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
     }
 }
 
@@ -1227,6 +2256,90 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
     }
 }
 /**
+ * Probes for the U2 async blocker: an async export that touches **no runtime**.
+ *
+ * The wallet's async surface completes on iOS from a detached task but hangs on
+ * Android from anything other than the instrumentation thread
+ * (`docs/ffi/kotlin-bindings-status.md`). Two very different things could cause
+ * that, and they need different fixes:
+ *
+ * 1. UniFFI's Kotlin foreign-future machinery cannot deliver its continuation
+ * callback off the calling thread at all, or
+ * 2. only futures parked on the tokio reactor fail to wake the foreign side.
+ *
+ * This future is `Ready` on first poll and is exported *without*
+ * `async_runtime = "tokio"`, so it exercises path 1 alone: the poll/continuation
+ * round-trip, with no reactor, no waker from a Rust-owned thread, and no I/O.
+ * If this hangs off-thread the fault is in the bindings; if it completes, the
+ * fault is in how a tokio-parked future wakes the foreign continuation.
+ *
+ * Diagnostic surface, not seam surface — delete once the blocker is resolved.
+ */
+public func asyncProbeNoRuntime(value: UInt32)async  -> UInt32 {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_func_async_probe_no_runtime(FfiConverterUInt32.lower(value)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u32,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u32,
+            freeFunc: ffi_lark_ffi_rust_future_free_u32,
+            liftFunc: FfiConverterUInt32.lift,
+            errorHandler: nil
+            
+        )
+}
+/**
+ * Third probe: parks on the tokio **I/O driver** rather than the timer.
+ *
+ * [`async_probe_tokio_timer`] proves a timer wake reaches the foreign
+ * continuation, but the timer and the I/O driver are separate wake paths inside
+ * tokio, and the wallet's chain source uses the I/O one (reqwest sockets). This
+ * opens a TCP connection and nothing else — no TLS, no HTTP, no bark — so a
+ * difference from the timer probe isolates the driver.
+ *
+ * Diagnostic surface, not seam surface — delete once the blocker is resolved.
+ */
+public func asyncProbeTokioTcp(addr: String)async throws  -> UInt32 {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_func_async_probe_tokio_tcp(FfiConverterString.lower(addr)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u32,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u32,
+            freeFunc: ffi_lark_ffi_rust_future_free_u32,
+            liftFunc: FfiConverterUInt32.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+/**
+ * The other half of the probe: identical shape, but parked on the tokio timer.
+ *
+ * Reaching the sleep's wake path means the reactor must wake the foreign
+ * continuation from a thread the caller never entered — the exact condition
+ * [`async_probe_no_runtime`] deliberately avoids. Kept trivial (no network, no
+ * sockets, no bark) so a difference between the two isolates the runtime rather
+ * than anything the wallet does.
+ */
+public func asyncProbeTokioTimer(millis: UInt32)async  -> UInt32 {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_func_async_probe_tokio_timer(FfiConverterUInt32.lower(millis)
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u32,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u32,
+            freeFunc: ffi_lark_ffi_rust_future_free_u32,
+            liftFunc: FfiConverterUInt32.lift,
+            errorHandler: nil
+            
+        )
+}
+/**
  * Generate a fresh BIP-39 mnemonic (12 or 24 words). The platform persists the
  * returned words in secure storage (KTD-11) — the crate does not store the
  * seed itself.
@@ -1242,6 +2355,9 @@ public func generateMnemonic(wordCount: UInt8)throws  -> [String] {
  * Open the wallet at `datadir` if it exists, otherwise create it. Creation is
  * server-free (`force = true`) so first-run onboarding does not require a
  * reachable Ark server; `onchain_bdk` backs boarding + unilateral exit (R5).
+ * Opening is server-tolerant for the same reason: bark logs a failed Ark
+ * handshake and carries on with no server, which is what lets a unilateral exit
+ * start and finish while captaind is down.
  * `words` is the BIP-39 mnemonic the platform generated and stored in secure
  * storage (KTD-11) — the crate never persists it.
  */
@@ -1302,10 +2418,19 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_lark_ffi_checksum_func_async_probe_no_runtime() != 21307) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_func_async_probe_tokio_tcp() != 23735) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_func_async_probe_tokio_timer() != 20635) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lark_ffi_checksum_func_generate_mnemonic() != 13454) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lark_ffi_checksum_func_open_wallet() != 26765) {
+    if (uniffi_lark_ffi_checksum_func_open_wallet() != 3368) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_func_restore_seed_from_artifact() != 56820) {
@@ -1317,7 +2442,13 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_balance_sats() != 48413) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lark_ffi_checksum_method_larkwallet_board() != 9117) {
+    if (uniffi_lark_ffi_checksum_method_larkwallet_board() != 59056) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_board_all() != 3671) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_chain_tip() != 8695) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_decrypt_state_blob() != 36113) {
@@ -1329,6 +2460,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 59105) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext() != 13007) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1338,13 +2472,37 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_mint_address() != 18162) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lark_ffi_checksum_method_larkwallet_movements() != 31055) {
+    if (uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_onchain_send() != 24908) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_onchain_send_fee() != 30579) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync() != 57231) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_progress_exit() != 37008) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_send_ark() != 38299) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_lark_ffi_checksum_method_larkwallet_send_bolt11() != 45122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_start_exit() != 23644) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_vtxo_summary() != 35839) {
         return InitializationResult.apiChecksumMismatch
     }
 

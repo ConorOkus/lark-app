@@ -173,6 +173,67 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in try await wallet.boardAll() }
     }
 
+    // MARK: - Unilateral exit
+
+    // No `cancelExit` here, and that is the contract rather than an omission: once an exit
+    // transaction is in the mempool it cannot be recalled.
+
+    func startExit(onDone: @escaping (String?) -> Void) {
+        performVoid(onDone) { wallet in try await wallet.startExit() }
+    }
+
+    func progressExit(onResult: @escaping (FfiExitStatus?, String?) -> Void) {
+        perform(onResult) { wallet in Self.mapExit(try await wallet.progressExit()) }
+    }
+
+    func exitStatus(onResult: @escaping (FfiExitStatus?, String?) -> Void) {
+        perform(onResult) { wallet in Self.mapExit(try await wallet.exitStatus()) }
+    }
+
+    func onchainSend(address: String, sats: Int64, onResult: @escaping (String?, String?) -> Void) {
+        perform(onResult) { wallet in
+            try await wallet.onchainSend(address: address, sats: UInt64(sats))
+        }
+    }
+
+    func onchainSendFee(
+        address: String,
+        sats: Int64,
+        onResult: @escaping (FfiOnchainFeeQuote?, String?) -> Void
+    ) {
+        perform(onResult) { wallet in
+            let quote = try await wallet.onchainSendFee(address: address, sats: UInt64(sats))
+            return FfiOnchainFeeQuote(
+                feeSat: Int64(quote.feeSat),
+                totalSat: Int64(quote.totalSat)
+            )
+        }
+    }
+
+    /// Crate exit status to the boundary's shape. The stage enum is mapped explicitly rather than
+    /// by raw value so a new crate stage fails to compile here instead of silently becoming
+    /// whichever case happened to share its ordinal.
+    private static func mapExit(_ status: ExitStatusInfo) -> FfiExitStatus {
+        let stage: FfiExitStage
+        switch status.stage {
+        case .none: stage = .none
+        case .start: stage = .start
+        case .processing: stage = .processing
+        case .awaitingDelta: stage = .awaitingDelta
+        case .claimable: stage = .claimable
+        case .claimInProgress: stage = .claimInProgress
+        case .claimed: stage = .claimed
+        case .unsupported: stage = .unsupported
+        }
+        return FfiExitStatus(
+            stage: stage,
+            vtxoCount: Int32(status.vtxoCount),
+            claimedCount: Int32(status.claimedCount),
+            totalSat: Int64(status.totalSat),
+            errors: status.errors
+        )
+    }
+
     // MARK: - Plumbing
 
     /// Runs `body` against the open wallet on a detached task and reports its result exactly once.

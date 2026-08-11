@@ -15,7 +15,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.blockExpiryLabel
+import xyz.lark.app.core.EXIT_STALL_THRESHOLD
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.gateway.arkReceiveUri
 import xyz.lark.app.core.model.AdvancedStats
 import xyz.lark.app.core.model.Contact
@@ -95,7 +99,7 @@ class DelegateBackedLarkCore(
     private val config: FfiWalletConfig,
     override val networkLabel: String,
     private val tuning: FfiTuning = FfiTuning(),
-) : LarkCore, OnchainFunding {
+) : LarkCore, OnchainFunding, WalletExit {
 
     /** Seeded from disk, not from the open: see the class comment's point 3. */
     private val walletExistsFlow = MutableStateFlow(store.walletFileExists())
@@ -183,6 +187,44 @@ class DelegateBackedLarkCore(
     override fun armFunding(atMillis: Long) = store.storeFundingArmedAt(atMillis)
 
     override fun disarmFunding() = store.storeFundingArmedAt(null)
+
+    // --- WalletExit ---
+
+    /**
+     * Consecutive progress passes that came back with an error.
+     *
+     * Counted here rather than in the crate because "how many failures means stalled" is app
+     * policy, and a threshold compiled into the FFI would be beyond the app's reach. Any clean
+     * pass resets it, so a stall reported once can clear.
+     */
+    private var consecutiveExitFailures = 0
+
+    override var exitStatus: ExitStatus = ExitStatus.NOT_EXITING
+        private set
+
+    override suspend fun startExit() {
+        delegate.awaitDone { onDone -> startExit(onDone) }
+        refreshExitStatus()
+    }
+
+    override suspend fun progressExit(): ExitStatus {
+        val reported = delegate.awaitValue<FfiExitStatus> { onResult -> progressExit(onResult) }
+        consecutiveExitFailures = when {
+            // A pass that could not run at all is as much a failure to advance as one the crate
+            // reported an error for; treating a dropped call as "fine" would hide a real stall.
+            reported == null -> consecutiveExitFailures + 1
+            reported.errors.isEmpty() -> 0
+            else -> consecutiveExitFailures + 1
+        }
+        exitStatus = reported.toExitStatus(consecutiveExitFailures) ?: exitStatus
+        return exitStatus
+    }
+
+    /** Re-read the exit without advancing it, for the status the machine resumes from. */
+    private suspend fun refreshExitStatus() {
+        val reported = delegate.awaitValue<FfiExitStatus> { onResult -> exitStatus(onResult) }
+        exitStatus = reported.toExitStatus(consecutiveExitFailures) ?: exitStatus
+    }
 
     init {
         // A wallet already on disk is opened without waiting for the user to ask (R3).

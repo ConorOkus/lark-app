@@ -60,6 +60,7 @@ private object AppGraph {
             demo = selection.demo,
             scope = scope,
             funding = selection.funding,
+            walletExit = selection.walletExit,
         )
     }
 }

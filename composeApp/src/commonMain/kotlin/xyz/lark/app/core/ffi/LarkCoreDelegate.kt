@@ -117,7 +117,92 @@ interface LarkCoreDelegate {
      * from a fresh one.
      */
     fun chainTip(onResult: (height: Long?, error: String?) -> Unit)
+
+    /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Needs no Ark server, which is the entire point — an implementation must not gate it on one
+     * being reachable. Calling it while an exit is already running is harmless.
+     *
+     * There is no matching `cancelExit`, and the absence is the contract: a mempool transaction
+     * cannot be recalled.
+     */
+    fun startExit(onDone: (error: String?) -> Unit)
+
+    /**
+     * Advance the exit by one pass and report where it stands.
+     *
+     * One call does not finish an exit — the middle of one is bounded by the chain, not by effort
+     * — so callers drive this repeatedly for as long as the wallet is exiting.
+     */
+    fun progressExit(onResult: (status: FfiExitStatus?, error: String?) -> Unit)
+
+    /**
+     * Where the exit stands, without advancing it. A local read, so it answers while offline.
+     */
+    fun exitStatus(onResult: (status: FfiExitStatus?, error: String?) -> Unit)
+
+    /**
+     * Spend on-chain funds to [address].
+     *
+     * Not exit-specific: exit proceeds, an unspent board, and leftover change all leave this way.
+     * The returned string is a txid.
+     */
+    fun onchainSend(address: String, sats: Long, onResult: (txid: String?, error: String?) -> Unit)
+
+    /**
+     * What [onchainSend] would cost, without sending it. Nothing is signed or broadcast.
+     */
+    fun onchainSendFee(
+        address: String,
+        sats: Long,
+        onResult: (quote: FfiOnchainFeeQuote?, error: String?) -> Unit,
+    )
 }
+
+/**
+ * How far a unilateral exit has got, as the crate reports it.
+ *
+ * The wallet's stage is the least advanced of its exiting VTXOs, so [CLAIMED] means every one of
+ * them is.
+ */
+enum class FfiExitStage {
+    NONE,
+    START,
+    PROCESSING,
+    AWAITING_DELTA,
+    CLAIMABLE,
+    CLAIM_IN_PROGRESS,
+    CLAIMED,
+
+    /** A channel stage this build cannot advance. Reported rather than mapped onto a real stage. */
+    UNSUPPORTED,
+}
+
+/**
+ * The wallet's exit, as the crate reports it.
+ *
+ * [errors] is per-pass, not sticky: a pass says what went wrong *this* time. Turning repetition
+ * into "stalled" is the adapter's job, because the threshold is app policy.
+ */
+data class FfiExitStatus(
+    val stage: FfiExitStage,
+    val vtxoCount: Int,
+    val claimedCount: Int,
+    val totalSat: Long,
+    val errors: List<String>,
+)
+
+/**
+ * What an on-chain send would cost.
+ *
+ * [totalSat] is amount plus fee — the figure that actually leaves the wallet — because that is
+ * what a user checks against their balance.
+ */
+data class FfiOnchainFeeQuote(
+    val feeSat: Long,
+    val totalSat: Long,
+)
 
 /**
  * Where the wallet lives and what it talks to.

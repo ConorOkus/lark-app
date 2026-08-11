@@ -2,6 +2,9 @@
 
 package xyz.lark.app.core.ffi
 
+import xyz.lark.app.core.EXIT_STALL_THRESHOLD
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.format.displayName
 import xyz.lark.app.core.format.initialOf
 import xyz.lark.app.core.format.relativeTimeLabel
@@ -17,6 +20,39 @@ import kotlin.time.Instant
  * and testable without a core or a device. The shared text helpers live in `core.format` precisely
  * so "2 hours ago" cannot mean two things depending on which engine is running.
  */
+
+/**
+ * Turn a reported exit into the seam's status, applying the app's stall policy.
+ *
+ * Null in means the pass could not be read at all, and null out leaves the caller's previous
+ * status standing. Mapping an unreadable pass to "not exiting" would drop the wallet out of the
+ * exiting state on a single dropped call — the one transition that must never happen by accident.
+ */
+internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? {
+    val reported = this ?: return null
+    val stage = reported.stage.toExitStage()
+    return ExitStatus(
+        stage = stage,
+        vtxoCount = reported.vtxoCount,
+        claimedCount = reported.claimedCount,
+        // Nothing is in flight once everything is claimed, whatever the exit set still sums to.
+        inFlightSats = if (stage == ExitStage.CLAIMED) 0L else reported.totalSat,
+        stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
+        reason = reported.errors.firstOrNull(),
+    )
+}
+
+/** The crate's stage names in the app's vocabulary — same order, words a user could read. */
+internal fun FfiExitStage.toExitStage(): ExitStage = when (this) {
+    FfiExitStage.NONE -> ExitStage.NONE
+    FfiExitStage.START -> ExitStage.STARTING
+    FfiExitStage.PROCESSING -> ExitStage.BROADCASTING
+    FfiExitStage.AWAITING_DELTA -> ExitStage.WAITING_OUT_DELAY
+    FfiExitStage.CLAIMABLE -> ExitStage.CLAIMABLE
+    FfiExitStage.CLAIM_IN_PROGRESS -> ExitStage.CLAIMING
+    FfiExitStage.CLAIMED -> ExitStage.CLAIMED
+    FfiExitStage.UNSUPPORTED -> ExitStage.UNSUPPORTED
+}
 
 /** A movement that failed or was cancelled is not part of the money timeline. */
 private val ACTIVITY_STATUSES = setOf(FfiMovementState.PENDING, FfiMovementState.SUCCESSFUL)
