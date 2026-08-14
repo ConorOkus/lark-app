@@ -2,6 +2,7 @@ package xyz.lark.app.core.ffi
 
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStallReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,12 +16,14 @@ private fun reported(
     claimedCount: Int = 0,
     totalSat: Long = 250_000L,
     errors: List<String> = emptyList(),
+    stallCategory: FfiExitStallCategory? = null,
 ) = FfiExitStatus(
     stage = stage,
     vtxoCount = vtxoCount,
     claimedCount = claimedCount,
     totalSat = totalSat,
     errors = errors,
+    stallCategory = stallCategory,
 )
 
 /** Mapping the crate's exit report into the seam's, including the app's stall policy. */
@@ -81,16 +84,43 @@ class FfiExitMappersTest {
     }
 
     @Test
-    fun the_first_error_becomes_the_reason() {
+    fun the_category_becomes_the_reason() {
         val status = assertNotNull(
-            reported(errors = listOf("first", "second")).toExitStatus(consecutiveFailures = 1),
+            reported(stallCategory = FfiExitStallCategory.CHAIN_UNREACHABLE)
+                .toExitStatus(consecutiveFailures = 1),
         )
-        assertEquals("first", status.reason)
+        assertEquals(ExitStallReason.CHAIN_UNREACHABLE, status.reason)
+    }
+
+    /**
+     * The engine's own wording carries VTXO ids and internals, so it must not be reachable from a
+     * status the UI renders. Errors present, category absent, reason still null is the proof.
+     */
+    @Test
+    fun the_engines_message_never_becomes_the_reason() {
+        val status = assertNotNull(
+            reported(errors = listOf("f00dbabe…: Database Store Failure: …"))
+                .toExitStatus(consecutiveFailures = 1),
+        )
+        assertNull(status.reason)
     }
 
     @Test
     fun a_clean_pass_carries_no_reason() {
         assertNull(assertNotNull(reported().toExitStatus(consecutiveFailures = 0)).reason)
+    }
+
+    @Test
+    fun every_crate_category_has_a_seam_reason() {
+        val mapped = FfiExitStallCategory.entries.map { it.toExitStallReason() }
+        assertEquals(FfiExitStallCategory.entries.size, mapped.distinct().size)
+    }
+
+    /** Only the fee-starved category comes with an action; the rest are wait-and-retry. */
+    @Test
+    fun only_a_funding_shortfall_is_clearable_by_the_holder() {
+        val clearable = ExitStallReason.entries.filter { it.isClearableByDeposit }
+        assertEquals(listOf(ExitStallReason.NEEDS_ONCHAIN_FUNDS), clearable)
     }
 
     @Test

@@ -180,10 +180,27 @@ enum class FfiExitStage {
 }
 
 /**
+ * Why an exit is not progressing, as the crate classifies it.
+ *
+ * The crate collapses its engine's 26 error variants into these before they cross, so the app
+ * never has to pattern-match an error string it does not own.
+ */
+enum class FfiExitStallCategory {
+    CHAIN_UNREACHABLE,
+    INSUFFICIENT_FUNDS,
+    UNECONOMIC,
+    BROADCAST_REJECTED,
+    UNEXPECTED,
+}
+
+/**
  * The wallet's exit, as the crate reports it.
  *
  * [errors] is per-pass, not sticky: a pass says what went wrong *this* time. Turning repetition
  * into "stalled" is the adapter's job, because the threshold is app policy.
+ *
+ * [errors] carries VTXO ids and the engine's own wording and is **for logs only**;
+ * [stallCategory] is the classified form and the only one a screen may speak.
  */
 data class FfiExitStatus(
     val stage: FfiExitStage,
@@ -191,6 +208,7 @@ data class FfiExitStatus(
     val claimedCount: Int,
     val totalSat: Long,
     val errors: List<String>,
+    val stallCategory: FfiExitStallCategory? = null,
 )
 
 /**

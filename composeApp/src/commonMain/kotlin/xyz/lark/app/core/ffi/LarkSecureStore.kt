@@ -51,4 +51,21 @@ interface LarkSecureStore {
 
     /** Persist the funding intent, or clear it when [millis] is null. */
     fun storeFundingArmedAt(millis: Long?)
+
+    /**
+     * When the wallet's last unilateral exit finished, as epoch millis, or null if none has.
+     *
+     * A fourth device-local fact, for the funding intent's reason: bark records that the exit is
+     * claimed, but not that the holder was ever told. Without this the completion receipt is shown
+     * again on every launch, or — if it were session-only — lost entirely when the app is killed
+     * between the last claim and the holder next opening it, which on a multi-hour exit is the
+     * likely case rather than the unlucky one.
+     *
+     * A timestamp rather than a flag so the receipt can carry when it happened, and so a later
+     * surface can re-open it, without a second stored fact to keep in step.
+     */
+    fun loadExitCompletedAt(): Long?
+
+    /** Persist the exit completion, or clear it when [millis] is null. */
+    fun storeExitCompletedAt(millis: Long?)
 }

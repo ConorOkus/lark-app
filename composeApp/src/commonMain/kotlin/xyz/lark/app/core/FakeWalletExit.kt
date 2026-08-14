@@ -11,12 +11,17 @@ package xyz.lark.app.core
  * [failingPasses] injects consecutive failures before progress resumes, which is the only way to
  * exercise the stall threshold. The failures are transient by construction: once they are spent,
  * the exit advances again, so a test can assert both that a stall raises and that it clears.
+ *
+ * [failureReason] scripts which category those failures carry. It matters because the categories
+ * are not interchangeable to the app: only [ExitStallReason.NEEDS_ONCHAIN_FUNDS] comes with an
+ * action, so a test that cannot choose the category cannot cover the branch that offers one.
  */
 class FakeWalletExit(
     private val script: List<ExitStage> = DEFAULT_SCRIPT,
     private val vtxoCount: Int = 3,
     private val inFlightSats: Long = 250_000L,
     private var failingPasses: Int = 0,
+    private val failureReason: ExitStallReason = ExitStallReason.CHAIN_UNREACHABLE,
     startedAlready: Boolean = false,
 ) : WalletExit {
 
@@ -47,7 +52,7 @@ class FakeWalletExit(
             consecutiveFailures++
             statusAt(index).copy(
                 stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
-                reason = "scripted failure",
+                reason = failureReason,
             )
         } else {
             consecutiveFailures = 0

@@ -4,6 +4,7 @@ package xyz.lark.app.core.ffi
 
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStallReason
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.format.displayName
 import xyz.lark.app.core.format.initialOf
@@ -38,8 +39,25 @@ internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? 
         // Nothing is in flight once everything is claimed, whatever the exit set still sums to.
         inFlightSats = if (stage == ExitStage.CLAIMED) 0L else reported.totalSat,
         stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
-        reason = reported.errors.firstOrNull(),
+        // The engine's message deliberately does not cross: `errors` holds VTXO ids and the
+        // engine's own wording, and the seam's reason is what a headline renders.
+        reason = reported.stallCategory?.toExitStallReason(),
     )
+}
+
+/**
+ * The crate's stall categories in the app's vocabulary.
+ *
+ * A missing category maps to [ExitStallReason.UNKNOWN] rather than to null: the caller only asks
+ * for a reason once a pass has already failed, so "failed but no category" is an engine this build
+ * predates, not an absence of trouble.
+ */
+internal fun FfiExitStallCategory.toExitStallReason(): ExitStallReason = when (this) {
+    FfiExitStallCategory.CHAIN_UNREACHABLE -> ExitStallReason.CHAIN_UNREACHABLE
+    FfiExitStallCategory.INSUFFICIENT_FUNDS -> ExitStallReason.NEEDS_ONCHAIN_FUNDS
+    FfiExitStallCategory.UNECONOMIC -> ExitStallReason.NOT_ECONOMIC
+    FfiExitStallCategory.BROADCAST_REJECTED -> ExitStallReason.BROADCAST_REJECTED
+    FfiExitStallCategory.UNEXPECTED -> ExitStallReason.UNKNOWN
 }
 
 /** The crate's stage names in the app's vocabulary — same order, words a user could read. */

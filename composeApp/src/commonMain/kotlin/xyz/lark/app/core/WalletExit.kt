@@ -69,6 +69,50 @@ enum class ExitStage {
 }
 
 /**
+ * Why an exit is not progressing, in terms a screen can speak.
+ *
+ * A category rather than a message. The engine's own error type has 26 variants naming internals
+ * a holder can neither act on nor understand, and no amount of per-variant copy would fix that —
+ * so the classification happens below the seam and the string never arrives. That is also what
+ * keeps an engine message or a VTXO id out of a headline: there is nothing here to leak.
+ */
+enum class ExitStallReason {
+    /** The chain source did not answer. Transient; waiting is the whole remedy. */
+    CHAIN_UNREACHABLE,
+
+    /**
+     * Not enough confirmed on-chain balance to pay what the exit costs.
+     *
+     * The engine checks this before an exit leaves its first state, so a wallet that boarded its
+     * whole balance cannot start an exit at all until on-chain funds arrive.
+     */
+    NEEDS_ONCHAIN_FUNDS,
+
+    /**
+     * The exit would cost more than it recovers, or a VTXO is below the dust limit.
+     *
+     * Kept apart from [NEEDS_ONCHAIN_FUNDS] because the shortfall is between a VTXO's value and
+     * its own exit cost, not in the wallet's balance — so depositing cannot clear it.
+     */
+    NOT_ECONOMIC,
+
+    /** A transaction was assembled but the network would not take it. */
+    BROADCAST_REJECTED,
+
+    /** Anything else, including a stall from an engine version this build predates. */
+    UNKNOWN;
+
+    /**
+     * Whether the holder can clear this stall themselves by funding the wallet on-chain.
+     *
+     * Lives here rather than in the UI so that only one place decides which stalls come with an
+     * action. Every other reason is reported and retried with nothing offered, because offering a
+     * remedy that cannot work is worse than offering none.
+     */
+    val isClearableByDeposit: Boolean get() = this == NEEDS_ONCHAIN_FUNDS
+}
+
+/**
  * The wallet's exit, as the app needs to see it.
  *
  * [stalled] is the app-facing judgement, not the engine's: an implementation counts consecutive
@@ -81,7 +125,7 @@ data class ExitStatus(
     val claimedCount: Int = 0,
     val inFlightSats: Long = 0,
     val stalled: Boolean = false,
-    val reason: String? = null,
+    val reason: ExitStallReason? = null,
 ) {
     /** Whether the wallet is in the exiting state, and so cannot send, receive, or board. */
     val isExiting: Boolean get() = stage != ExitStage.NONE && stage != ExitStage.CLAIMED

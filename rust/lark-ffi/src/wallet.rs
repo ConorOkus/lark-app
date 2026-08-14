@@ -15,7 +15,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use bark::exit::{ExitState, ExitVtxo};
+use bark::exit::{ExitError, ExitState, ExitVtxo};
 use bark::persist::sqlite::SqliteClient;
 use bark::movement::PaymentMethod;
 use bark::onchain::{ChainSync, OnchainWallet};
@@ -371,21 +371,32 @@ impl LarkWallet {
             .progress_exits(&self.inner, &mut *onchain, None)
             .await
             .map_err(LarkError::from)?;
-        let errors = statuses
+        // One walk, two outputs: the log line keeps the VTXO id and bark's own wording, while the
+        // category is what the app is allowed to show. They are derived together so a pass can
+        // never report a stall the log cannot explain, or a log line the app silently drops.
+        let (errors, categories): (Vec<String>, Vec<ExitStallCategory>) = statuses
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|s| s.error.map(|e| format!("{}: {e}", s.vtxo_id)))
-            .collect();
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors))
+            .filter_map(|s| {
+                s.error.map(|e| {
+                    (format!("{}: {e}", s.vtxo_id), ExitStallCategory::from(&e))
+                })
+            })
+            .unzip();
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors, &categories))
     }
 
     /// Where the wallet's exit stands, without advancing it.
     ///
     /// A local read over persisted state, so it answers with no server and no chain source and is
     /// safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+    ///
+    /// Reports no errors and no stall category: both are per-pass facts produced by attempting
+    /// progress, and inventing them from persisted state would let a read claim a stall that no
+    /// pass observed.
     pub async fn exit_status(&self) -> Result<ExitStatusInfo, LarkError> {
         let exit = self.inner.exit.read().await;
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new()))
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new(), &[]))
     }
 
     /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
@@ -560,11 +571,90 @@ impl From<&ExitState> for ExitStage {
     }
 }
 
+/// Why an exit is not progressing, in terms the app can write copy against.
+///
+/// bark's [`ExitError`] has 26 variants, most of which describe internals a holder can neither
+/// act on nor understand. Classifying here rather than in the app is what lets the seam carry a
+/// category instead of an error string: a string in a headline is how an enum name or a txid
+/// reaches a screen, and there is no way to write per-variant copy for a set this size.
+///
+/// The categories split on **what the holder can do**, not on where the error came from, which is
+/// why [`Self::InsufficientFunds`] and [`Self::Uneconomic`] are separate despite both being about
+/// money. Depositing fixes the first and cannot fix the second.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStallCategory {
+    /// The chain source did not answer. Transient; retrying is the whole remedy.
+    ChainUnreachable,
+    /// Not enough confirmed on-chain balance to pay what the exit costs.
+    ///
+    /// The only category a holder can clear, and not rare: `ExitStartState::progress` checks
+    /// `onchain.get_balance()` against the estimated exit cost before an exit leaves its first
+    /// state, so a wallet that boarded its whole balance cannot start an exit at all until it has
+    /// on-chain funds again.
+    InsufficientFunds,
+    /// The exit costs more than it would recover, or the VTXO is below the dust limit.
+    ///
+    /// Distinct from [`Self::InsufficientFunds`] because depositing does not help: the shortfall
+    /// is between the VTXO's value and its own exit cost, not in the wallet's balance.
+    Uneconomic,
+    /// A transaction was assembled but the network would not take it.
+    BroadcastRejected,
+    /// Anything else. Deliberately the catch-all arm rather than an exhaustive match: a bark pin
+    /// bump that adds a variant should keep compiling and report honestly, not fail the build.
+    Unexpected,
+}
+
+impl ExitStallCategory {
+    /// Which category speaks for the wallet when its VTXOs disagree.
+    ///
+    /// Lowest rank wins. [`Self::InsufficientFunds`] outranks everything because it is the only
+    /// category with an action behind it — burying a clearable stall under a transient one would
+    /// leave the holder waiting for something that cannot resolve on its own.
+    fn rank(self) -> u8 {
+        match self {
+            ExitStallCategory::InsufficientFunds => 0,
+            ExitStallCategory::Uneconomic => 1,
+            ExitStallCategory::BroadcastRejected => 2,
+            ExitStallCategory::ChainUnreachable => 3,
+            ExitStallCategory::Unexpected => 4,
+        }
+    }
+
+    fn aggregate(categories: &[ExitStallCategory]) -> Option<ExitStallCategory> {
+        categories.iter().copied().min_by_key(|c| c.rank())
+    }
+}
+
+impl From<&ExitError> for ExitStallCategory {
+    fn from(error: &ExitError) -> Self {
+        match error {
+            ExitError::AncestorRetrievalFailure { .. }
+            | ExitError::BlockRetrievalFailure { .. }
+            | ExitError::TipRetrievalFailure { .. }
+            | ExitError::TransactionRetrievalFailure { .. } => ExitStallCategory::ChainUnreachable,
+
+            ExitError::InsufficientConfirmedFunds { .. }
+            | ExitError::InsufficientFeeToStart { .. } => ExitStallCategory::InsufficientFunds,
+
+            ExitError::ClaimFeeExceedsOutput { .. } | ExitError::DustLimit { .. } => {
+                ExitStallCategory::Uneconomic
+            }
+
+            ExitError::ExitPackageBroadcastFailure { .. } => ExitStallCategory::BroadcastRejected,
+
+            _ => ExitStallCategory::Unexpected,
+        }
+    }
+}
+
 /// The wallet's exit, summarised.
 ///
 /// `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
 /// and the caller decides whether repetition means stalled. Keeping the counting out here is
 /// deliberate — a threshold baked into the crate would be a policy the app cannot change.
+///
+/// `errors` carries VTXO ids and bark's own wording, so it is **for logs only** — `stall_category`
+/// is the field a screen may render.
 #[derive(uniffi::Record)]
 pub struct ExitStatusInfo {
     pub stage: ExitStage,
@@ -572,10 +662,16 @@ pub struct ExitStatusInfo {
     pub claimed_count: u32,
     pub total_sat: u64,
     pub errors: Vec<String>,
+    /// The category speaking for the wallet this pass, or `None` when nothing went wrong.
+    pub stall_category: Option<ExitStallCategory>,
 }
 
 impl ExitStatusInfo {
-    fn summarise(vtxos: &[ExitVtxo], errors: Vec<String>) -> Self {
+    fn summarise(
+        vtxos: &[ExitVtxo],
+        errors: Vec<String>,
+        categories: &[ExitStallCategory],
+    ) -> Self {
         let stages: Vec<ExitStage> = vtxos.iter().map(|v| ExitStage::from(v.state())).collect();
         ExitStatusInfo {
             stage: ExitStage::aggregate(&stages),
@@ -583,7 +679,77 @@ impl ExitStatusInfo {
             claimed_count: stages.iter().filter(|s| **s == ExitStage::Claimed).count() as u32,
             total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
             errors,
+            stall_category: ExitStallCategory::aggregate(categories),
         }
+    }
+}
+
+#[cfg(test)]
+mod exit_stall_category_tests {
+    use super::ExitStallCategory;
+    use bark::exit::ExitError;
+    use bitcoin::{Amount, FeeRate};
+
+    fn chain_unreachable() -> ExitError {
+        ExitError::BlockRetrievalFailure { height: 100, error: "connection refused".into() }
+    }
+
+    fn fee_starved() -> ExitError {
+        ExitError::InsufficientFeeToStart {
+            balance: Amount::from_sat(0),
+            total_fee: Amount::from_sat(612),
+            fee_rate: FeeRate::from_sat_per_vb_u32(1),
+        }
+    }
+
+    fn uneconomic() -> ExitError {
+        ExitError::DustLimit { vtxo: Amount::from_sat(100), dust: Amount::from_sat(330) }
+    }
+
+    #[test]
+    fn each_category_has_a_representative_variant() {
+        assert_eq!(ExitStallCategory::from(&chain_unreachable()), ExitStallCategory::ChainUnreachable);
+        assert_eq!(ExitStallCategory::from(&fee_starved()), ExitStallCategory::InsufficientFunds);
+        assert_eq!(ExitStallCategory::from(&uneconomic()), ExitStallCategory::Uneconomic);
+    }
+
+    /// The catch-all arm is the point: a bark pin bump that adds a variant must keep compiling and
+    /// land in `Unexpected`, not fail the build or be silently mislabelled as something actionable.
+    #[test]
+    fn an_unmapped_variant_is_unexpected() {
+        assert_eq!(
+            ExitStallCategory::from(&ExitError::ClaimMissingInputs),
+            ExitStallCategory::Unexpected,
+        );
+    }
+
+    /// Fee starvation is the only category with an action behind it, so it must not be hidden by a
+    /// transient failure on another VTXO — the holder would be told to wait for something that
+    /// cannot resolve without them.
+    #[test]
+    fn a_clearable_stall_outranks_a_transient_one() {
+        let categories = [ExitStallCategory::ChainUnreachable, ExitStallCategory::InsufficientFunds];
+        assert_eq!(
+            ExitStallCategory::aggregate(&categories),
+            Some(ExitStallCategory::InsufficientFunds),
+        );
+    }
+
+    /// Depositing clears `InsufficientFunds` and cannot clear `Uneconomic`, so when both are
+    /// present the actionable one speaks — offering a deposit that helps some VTXOs is honest,
+    /// offering none when one could be helped is not.
+    #[test]
+    fn insufficient_funds_outranks_uneconomic() {
+        let categories = [ExitStallCategory::Uneconomic, ExitStallCategory::InsufficientFunds];
+        assert_eq!(
+            ExitStallCategory::aggregate(&categories),
+            Some(ExitStallCategory::InsufficientFunds),
+        );
+    }
+
+    #[test]
+    fn no_errors_means_no_category() {
+        assert_eq!(ExitStallCategory::aggregate(&[]), None);
     }
 }
 

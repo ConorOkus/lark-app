@@ -23,6 +23,7 @@ final class KeychainSecureStore: LarkSecureStore {
     private let walletFileName = "wallet.sqlite"
     private let backedUpMarkerName = "backed-up"
     private let fundingArmedAtMarkerName = "funding-armed-at"
+    private let exitCompletedAtMarkerName = "exit-completed-at"
 
     /// `lark/` under Application Support, created on first use.
     var datadir: String {
@@ -104,6 +105,29 @@ final class KeychainSecureStore: LarkSecureStore {
 
     private var fundingArmedAtPath: String {
         datadir + "/" + fundingArmedAtMarkerName
+    }
+
+    /// The same marker-file shape as the funding intent, for the same reason: the value is a fact
+    /// about this device rather than about the wallet, so it belongs beside the datadir and not in
+    /// bark's database. Unparseable is treated as absent — a receipt shown twice is a smaller
+    /// failure than one suppressed because a corrupt file parsed as some epoch.
+    func loadExitCompletedAt() -> KotlinLong? {
+        guard let text = try? String(contentsOfFile: exitCompletedAtPath, encoding: .utf8),
+              let millis = Int64(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return KotlinLong(longLong: millis)
+    }
+
+    func storeExitCompletedAt(millis: KotlinLong?) {
+        guard let millis else {
+            try? FileManager.default.removeItem(atPath: exitCompletedAtPath)
+            return
+        }
+        try? String(millis.int64Value).write(toFile: exitCompletedAtPath, atomically: true, encoding: .utf8)
+    }
+
+    private var exitCompletedAtPath: String {
+        datadir + "/" + exitCompletedAtMarkerName
     }
 }
 

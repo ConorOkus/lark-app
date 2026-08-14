@@ -1089,7 +1089,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 59105.toShort()) {
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 15134.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext() != 13007.toShort()) {
@@ -1611,6 +1611,10 @@ public interface LarkWalletInterface {
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
      * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     *
+     * Reports no errors and no stall category: both are per-pass facts produced by attempting
+     * progress, and inventing them from persisted state would let a read claim a stall that no
+     * pass observed.
      */
     suspend fun `exitStatus`(): ExitStatusInfo
     
@@ -2015,6 +2019,10 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
      * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     *
+     * Reports no errors and no stall category: both are per-pass facts produced by attempting
+     * progress, and inventing them from persisted state would let a read claim a stall that no
+     * pass observed.
      */
     @Throws(LarkException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
@@ -2473,13 +2481,20 @@ public object FfiConverterTypeLarkWallet: FfiConverter<LarkWallet, Pointer> {
  * `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
  * and the caller decides whether repetition means stalled. Keeping the counting out here is
  * deliberate — a threshold baked into the crate would be a policy the app cannot change.
+ *
+ * `errors` carries VTXO ids and bark's own wording, so it is **for logs only** — `stall_category`
+ * is the field a screen may render.
  */
 data class ExitStatusInfo (
     var `stage`: ExitStage, 
     var `vtxoCount`: kotlin.UInt, 
     var `claimedCount`: kotlin.UInt, 
     var `totalSat`: kotlin.ULong, 
-    var `errors`: List<kotlin.String>
+    var `errors`: List<kotlin.String>, 
+    /**
+     * The category speaking for the wallet this pass, or `None` when nothing went wrong.
+     */
+    var `stallCategory`: ExitStallCategory?
 ) {
     
     companion object
@@ -2496,6 +2511,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalTypeExitStallCategory.read(buf),
         )
     }
 
@@ -2504,7 +2520,8 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.allocationSize(value.`vtxoCount`) +
             FfiConverterUInt.allocationSize(value.`claimedCount`) +
             FfiConverterULong.allocationSize(value.`totalSat`) +
-            FfiConverterSequenceString.allocationSize(value.`errors`)
+            FfiConverterSequenceString.allocationSize(value.`errors`) +
+            FfiConverterOptionalTypeExitStallCategory.allocationSize(value.`stallCategory`)
     )
 
     override fun write(value: ExitStatusInfo, buf: ByteBuffer) {
@@ -2513,6 +2530,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.write(value.`claimedCount`, buf)
             FfiConverterULong.write(value.`totalSat`, buf)
             FfiConverterSequenceString.write(value.`errors`, buf)
+            FfiConverterOptionalTypeExitStallCategory.write(value.`stallCategory`, buf)
     }
 }
 
@@ -2793,6 +2811,75 @@ public object FfiConverterTypeExitStage: FfiConverterRustBuffer<ExitStage> {
 
 
 
+/**
+ * Why an exit is not progressing, in terms the app can write copy against.
+ *
+ * bark's [`ExitError`] has 26 variants, most of which describe internals a holder can neither
+ * act on nor understand. Classifying here rather than in the app is what lets the seam carry a
+ * category instead of an error string: a string in a headline is how an enum name or a txid
+ * reaches a screen, and there is no way to write per-variant copy for a set this size.
+ *
+ * The categories split on **what the holder can do**, not on where the error came from, which is
+ * why [`Self::InsufficientFunds`] and [`Self::Uneconomic`] are separate despite both being about
+ * money. Depositing fixes the first and cannot fix the second.
+ */
+
+enum class ExitStallCategory {
+    
+    /**
+     * The chain source did not answer. Transient; retrying is the whole remedy.
+     */
+    CHAIN_UNREACHABLE,
+    /**
+     * Not enough confirmed on-chain balance to pay what the exit costs.
+     *
+     * The only category a holder can clear, and not rare: `ExitStartState::progress` checks
+     * `onchain.get_balance()` against the estimated exit cost before an exit leaves its first
+     * state, so a wallet that boarded its whole balance cannot start an exit at all until it has
+     * on-chain funds again.
+     */
+    INSUFFICIENT_FUNDS,
+    /**
+     * The exit costs more than it would recover, or the VTXO is below the dust limit.
+     *
+     * Distinct from [`Self::InsufficientFunds`] because depositing does not help: the shortfall
+     * is between the VTXO's value and its own exit cost, not in the wallet's balance.
+     */
+    UNECONOMIC,
+    /**
+     * A transaction was assembled but the network would not take it.
+     */
+    BROADCAST_REJECTED,
+    /**
+     * Anything else. Deliberately the catch-all arm rather than an exhaustive match: a bark pin
+     * bump that adds a variant should keep compiling and report honestly, not fail the build.
+     */
+    UNEXPECTED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeExitStallCategory: FfiConverterRustBuffer<ExitStallCategory> {
+    override fun read(buf: ByteBuffer) = try {
+        ExitStallCategory.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ExitStallCategory) = 4UL
+
+    override fun write(value: ExitStallCategory, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 
 /**
@@ -2964,6 +3051,38 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
         } else {
             buf.put(1)
             FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeExitStallCategory: FfiConverterRustBuffer<ExitStallCategory?> {
+    override fun read(buf: ByteBuffer): ExitStallCategory? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeExitStallCategory.read(buf)
+    }
+
+    override fun allocationSize(value: ExitStallCategory?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeExitStallCategory.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ExitStallCategory?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeExitStallCategory.write(value, buf)
         }
     }
 }

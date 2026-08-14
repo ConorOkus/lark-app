@@ -225,12 +225,25 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         case .claimed: stage = .claimed
         case .unsupported: stage = .unsupported
         }
+        // Mapped explicitly for the same reason as the stage: a category added by a later crate
+        // version must break this build rather than land on whichever case shares its ordinal.
+        // Getting this wrong would silently offer a deposit for a stall depositing cannot clear.
+        var category: FfiExitStallCategory?
+        switch status.stallCategory {
+        case .some(.chainUnreachable): category = .chainUnreachable
+        case .some(.insufficientFunds): category = .insufficientFunds
+        case .some(.uneconomic): category = .uneconomic
+        case .some(.broadcastRejected): category = .broadcastRejected
+        case .some(.unexpected): category = .unexpected
+        case .none: category = nil
+        }
         return FfiExitStatus(
             stage: stage,
             vtxoCount: Int32(status.vtxoCount),
             claimedCount: Int32(status.claimedCount),
             totalSat: Int64(status.totalSat),
-            errors: status.errors
+            errors: status.errors,
+            stallCategory: category
         )
     }
 

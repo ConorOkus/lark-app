@@ -582,6 +582,10 @@ public protocol LarkWalletProtocol : AnyObject {
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
      * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     *
+     * Reports no errors and no stall category: both are per-pass facts produced by attempting
+     * progress, and inventing them from persisted state would let a read claim a stall that no
+     * pass observed.
      */
     func exitStatus() async throws  -> ExitStatusInfo
     
@@ -924,6 +928,10 @@ open func encryptStateBlob(plaintext: Data, version: UInt64)throws  -> Data {
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
      * safe to call on every poll. `stage` is [`ExitStage::None`] when nothing is exiting.
+     *
+     * Reports no errors and no stall category: both are per-pass facts produced by attempting
+     * progress, and inventing them from persisted state would let a read claim a stall that no
+     * pass observed.
      */
 open func exitStatus()async throws  -> ExitStatusInfo {
     return
@@ -1334,6 +1342,9 @@ public func FfiConverterTypeLarkWallet_lower(_ value: LarkWallet) -> UnsafeMutab
  * `errors` is per-pass rather than sticky: a progress pass reports what went wrong *this* time,
  * and the caller decides whether repetition means stalled. Keeping the counting out here is
  * deliberate — a threshold baked into the crate would be a policy the app cannot change.
+ *
+ * `errors` carries VTXO ids and bark's own wording, so it is **for logs only** — `stall_category`
+ * is the field a screen may render.
  */
 public struct ExitStatusInfo {
     public var stage: ExitStage
@@ -1341,15 +1352,23 @@ public struct ExitStatusInfo {
     public var claimedCount: UInt32
     public var totalSat: UInt64
     public var errors: [String]
+    /**
+     * The category speaking for the wallet this pass, or `None` when nothing went wrong.
+     */
+    public var stallCategory: ExitStallCategory?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, errors: [String]) {
+    public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, errors: [String], 
+        /**
+         * The category speaking for the wallet this pass, or `None` when nothing went wrong.
+         */stallCategory: ExitStallCategory?) {
         self.stage = stage
         self.vtxoCount = vtxoCount
         self.claimedCount = claimedCount
         self.totalSat = totalSat
         self.errors = errors
+        self.stallCategory = stallCategory
     }
 }
 
@@ -1372,6 +1391,9 @@ extension ExitStatusInfo: Equatable, Hashable {
         if lhs.errors != rhs.errors {
             return false
         }
+        if lhs.stallCategory != rhs.stallCategory {
+            return false
+        }
         return true
     }
 
@@ -1381,6 +1403,7 @@ extension ExitStatusInfo: Equatable, Hashable {
         hasher.combine(claimedCount)
         hasher.combine(totalSat)
         hasher.combine(errors)
+        hasher.combine(stallCategory)
     }
 }
 
@@ -1396,7 +1419,8 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
                 vtxoCount: FfiConverterUInt32.read(from: &buf), 
                 claimedCount: FfiConverterUInt32.read(from: &buf), 
                 totalSat: FfiConverterUInt64.read(from: &buf), 
-                errors: FfiConverterSequenceString.read(from: &buf)
+                errors: FfiConverterSequenceString.read(from: &buf), 
+                stallCategory: FfiConverterOptionTypeExitStallCategory.read(from: &buf)
         )
     }
 
@@ -1406,6 +1430,7 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.claimedCount, into: &buf)
         FfiConverterUInt64.write(value.totalSat, into: &buf)
         FfiConverterSequenceString.write(value.errors, into: &buf)
+        FfiConverterOptionTypeExitStallCategory.write(value.stallCategory, into: &buf)
     }
 }
 
@@ -1971,6 +1996,127 @@ extension ExitStage: Equatable, Hashable {}
 
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Why an exit is not progressing, in terms the app can write copy against.
+ *
+ * bark's [`ExitError`] has 26 variants, most of which describe internals a holder can neither
+ * act on nor understand. Classifying here rather than in the app is what lets the seam carry a
+ * category instead of an error string: a string in a headline is how an enum name or a txid
+ * reaches a screen, and there is no way to write per-variant copy for a set this size.
+ *
+ * The categories split on **what the holder can do**, not on where the error came from, which is
+ * why [`Self::InsufficientFunds`] and [`Self::Uneconomic`] are separate despite both being about
+ * money. Depositing fixes the first and cannot fix the second.
+ */
+
+public enum ExitStallCategory {
+    
+    /**
+     * The chain source did not answer. Transient; retrying is the whole remedy.
+     */
+    case chainUnreachable
+    /**
+     * Not enough confirmed on-chain balance to pay what the exit costs.
+     *
+     * The only category a holder can clear, and not rare: `ExitStartState::progress` checks
+     * `onchain.get_balance()` against the estimated exit cost before an exit leaves its first
+     * state, so a wallet that boarded its whole balance cannot start an exit at all until it has
+     * on-chain funds again.
+     */
+    case insufficientFunds
+    /**
+     * The exit costs more than it would recover, or the VTXO is below the dust limit.
+     *
+     * Distinct from [`Self::InsufficientFunds`] because depositing does not help: the shortfall
+     * is between the VTXO's value and its own exit cost, not in the wallet's balance.
+     */
+    case uneconomic
+    /**
+     * A transaction was assembled but the network would not take it.
+     */
+    case broadcastRejected
+    /**
+     * Anything else. Deliberately the catch-all arm rather than an exhaustive match: a bark pin
+     * bump that adds a variant should keep compiling and report honestly, not fail the build.
+     */
+    case unexpected
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExitStallCategory: FfiConverterRustBuffer {
+    typealias SwiftType = ExitStallCategory
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExitStallCategory {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .chainUnreachable
+        
+        case 2: return .insufficientFunds
+        
+        case 3: return .uneconomic
+        
+        case 4: return .broadcastRejected
+        
+        case 5: return .unexpected
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ExitStallCategory, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .chainUnreachable:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .insufficientFunds:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .uneconomic:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .broadcastRejected:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .unexpected:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStallCategory_lift(_ buf: RustBuffer) throws -> ExitStallCategory {
+    return try FfiConverterTypeExitStallCategory.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExitStallCategory_lower(_ value: ExitStallCategory) -> RustBuffer {
+    return FfiConverterTypeExitStallCategory.lower(value)
+}
+
+
+
+extension ExitStallCategory: Equatable, Hashable {}
+
+
+
 
 /**
  * Top-level FFI error. Coarse by design — the seam maps these to health/errors,
@@ -2155,6 +2301,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeExitStallCategory: FfiConverterRustBuffer {
+    typealias SwiftType = ExitStallCategory?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeExitStallCategory.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeExitStallCategory.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2460,7 +2630,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 59105) {
+    if (uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 15134) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext() != 13007) {
