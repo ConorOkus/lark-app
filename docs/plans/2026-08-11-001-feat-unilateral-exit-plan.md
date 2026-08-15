@@ -16,8 +16,8 @@ execution: code
 - **Objective:** Make unilateral exit real for VTXOs — a wallet can leave the Ark without the Ark server, land its funds on-chain, and send them to an address the holder names. Channel exit is not active scope.
 - **Product authority:** This plan owns VTXO exit and the on-chain send that makes exited funds reachable. Channel force-close resolution, background progression, and tester-facing comprehension are named as surrounding work, not requirements here.
 - **Open blockers:** None.
-- **Product Contract preservation:** Product Contract extended 2026-08-14 — five surface decisions added as Key Decisions, R19–R23 added, and the third Key Decision corrected where it wrongly described post-exit funds as sitting outside the holder's control. No prior decision reversed.
-- **State:** U1–U7 are landed on `feat/unilateral-exit`. U9 (added by document review) and U8 are unbuilt, in that order. Two Definition-of-Done items sit outside U8 and remain unmet: the drill has never been recorded reaching `Claimed` with captaind stopped, and `docs/liveness-envelope.md` still lists exit as a missing fallback. `KTD-5` sequenced the drill ahead of the screens deliberately — building U8 before that recorded run inverts the order this plan chose, and does so knowingly.
+- **Product Contract preservation:** Product Contract extended 2026-08-14 — five surface decisions added as Key Decisions, R19–R24 added, and the third Key Decision corrected where it wrongly described post-exit funds as sitting outside the holder's control. Amended again the same day from implementation: R13a/R13b/R20c added, R13, R19 and R20a corrected where they described sources the engine does not offer. No prior decision reversed; the corrections are to facts the plan asserted, not to choices the user made.
+- **State:** U1–U7 and U9 are landed on `feat/unilateral-exit`, along with U8's first piece (the exit screen's figures, `dc9e77c`). U8's remaining four pieces — the exiting surface, the stalled treatment, the completion receipt, and on-chain as a destination kind — are unbuilt. Two Definition-of-Done items sit outside U8 and remain unmet: the drill has never been recorded reaching `Claimed` with captaind stopped, and `docs/liveness-envelope.md` still lists exit as a missing fallback. `KTD-5` sequenced the drill ahead of the screens deliberately — building U8 before that recorded run inverts the order this plan chose, and does so knowingly.
 
 ---
 
@@ -114,7 +114,9 @@ While in `Exiting` the wallet accepts no sends or receives, keeps the funding in
 
 **Honest figures**
 
-- R13. The exit screen's amount, miner fee, and time-to-spendable are derived from wallet and network state rather than hardcoded.
+- R13. The exit screen's amount, miner fee, and time-to-spendable are derived from wallet and network state rather than hardcoded. Any figure that cannot be derived is shown as an unknown; none is defaulted, estimated, or silently dropped.
+- R13a. The miner fee is shown as unknown until the engine exposes an exit-cost estimate. *(Added 2026-08-14 after implementation. `estimate_exit_cost` is `pub(crate)` in the pinned bark fork — see Dependencies — so no caller above the engine can price an exit. The row is kept rather than removed: an em-dash reports that the cost is not known, where an absent row would not report that the cost exists.)*
+- R13b. Time-to-spendable is shown as unknown whenever the exit delta cannot be read. *(Added 2026-08-14. The delta lives on the Ark server's `ArkInfo` and is not persisted, so a wallet with no reachable server cannot know it — which is the wallet most likely to be on this screen. Being able to say so is part of the requirement, not a shortfall against it.)*
 
 **Proof**
 
@@ -129,10 +131,11 @@ While in `Exiting` the wallet accepts no sends or receives, keeps the funding in
 
 **The exit surfaces** *(added 2026-08-14)*
 
-- R19. While an exit is progressing, the exiting surface replaces the home screen's balance and action area rather than sitting above them. Its headline carries a number only where one is derivable: during `AwaitingDelta` it is the estimated time to claimable, derived from the exit delta against the network's block spacing. During `Processing` and `Claimable` — where the remaining time depends on unknown confirmation time — the headline is the state in plain language and no figure is shown.
+- R19. While an exit is progressing, the exiting surface replaces the home screen's balance and action area rather than sitting above them. Its headline carries a number only where one is derivable: during `AwaitingDelta` it is the time to claimable, computed from the exit's own claimable height against the chain tip at the network's block spacing. During `Processing` and `Claimable` — where the remaining time depends on unknown confirmation time — the headline is the state in plain language and no figure is shown. *(Amended 2026-08-14 during implementation: originally said the countdown came from the exit delta. It does not, and the difference matters — the claimable height is persisted with the exit, so the in-flight countdown works with no Ark server, while the delta does not and would have made the countdown fail in exactly the scenario this plan is built to demonstrate.)*
 - R20. While an exit is stalled, the headline is a plain-language statement of the reason, elapsed-since-stall moves to the subline, and the stalled step is marked in the step list. No raw enum name, error string, or txid reaches the surface.
-- R20a. `ExitError`'s variants are classified into a small set of holder-meaningful categories before they cross the seam — chain unreachable, insufficient on-chain funds for exit fees, broadcast rejected, and unexpected. The seam carries the category; the engine's raw message is retained for logs only. Copy is written per category, not per variant.
+- R20a. `ExitError`'s variants are classified into a small set of holder-meaningful categories before they cross the seam — chain unreachable, insufficient on-chain funds for exit fees, uneconomic, broadcast rejected, and unexpected. The seam carries the category; the engine's raw message is retained for logs only. Copy is written per category, not per variant. *(Amended 2026-08-14 during implementation: originally four categories. `ClaimFeeExceedsOutput` and `DustLimit` are not fee starvation — the shortfall is between a VTXO's value and its own exit cost, so depositing cannot clear them — and they are not "unexpected" either. Folding them into either existing category would have made the surface lie about what the holder can do.)*
 - R20b. A stall whose category is insufficient on-chain funds for exit fees says so and offers the on-chain deposit route, because retrying cannot clear it. This is the sole exception to R18's no-action rule; every other category is reported and retried with no action offered. Depositing to unstick an exit does not leave exiting mode and is not a cancel.
+- R20c. The classification is exhaustive by fallback, not by match: an engine variant this build does not recognise reports as unexpected rather than failing to compile or being mistaken for an actionable category. *(Added 2026-08-14. The fork pin can add variants, and the failure mode worth designing against is a new funding-shaped error quietly landing somewhere that offers no deposit — or somewhere that offers one when it cannot help.)*
 - R21. When exiting mode ends, the holder is shown a one-time completion receipt naming the amount landed, the miner fee paid, and the elapsed time, before the ordinary home surface. It is shown once per exit and does not reappear on subsequent opens, including across a relaunch between completion and dismissal. The shown-once state is a completion timestamp held in the platform secure store beside the funding intent, not a boolean — bark does not persist it and it must survive app termination for the same reason the funding intent does.
 - R22. The completion receipt does not describe the landed funds as needing to be moved to safety. They are already at an address the holder's seed controls; any onward send is presented as optional.
 - R23. An on-chain address entered in the pay flow is recognised as on-chain, routed to the on-chain send, and shown with its route and quoted miner fee before confirmation. An on-chain address is never offered as payable through the Ark path.
@@ -170,6 +173,8 @@ While in `Exiting` the wallet accepts no sends or receives, keeps the funding in
 - AE5. **Covers R9.** Given the last VTXO reaches `Claimed`, when the holder returns to home, then the wallet reports a normal state with an on-chain balance, no VTXOs, and boarding available again.
 - AE6. **Covers R16.** Given the deployed stack is unreachable, when the drill runs, then it reports a skip rather than a pass.
 - AE7. **Covers R17, R18.** Given an exit cannot progress, when the holder opens the app, then the wallet reports the exit as stalled with its reason and retries it, and offers no way to leave exiting mode.
+- AE7a. **Covers R13a, R13b.** Given the holder opens the exit screen, when the engine cannot price an exit and no server can supply the delta, then the miner fee and the wait both read as unknown and neither shows a number.
+- AE7b. **Covers R13b.** Given a reachable server supplies an exit delta of 144 blocks, when the holder opens the exit screen, then the wait reads at the network's real spacing — about an hour, not about a day.
 - AE8. **Covers R19.** Given an exit is in `AwaitingDelta`, when the holder opens the app, then the largest thing on the surface is the estimated time to claimable, and the balance and action area are not shown.
 - AE8a. **Covers R19.** Given an exit is in `Processing` or `Claimable`, when the holder opens the app, then the headline names the state in plain language and shows no time figure.
 - AE9. **Covers R20, R20a.** Given an exit has stalled, when the holder opens the app, then the headline states the category in plain language, elapsed-since-stall appears beneath it, and no enum name, engine message, or txid is rendered.
@@ -227,7 +232,9 @@ This plan owns one area: VTXO exit through to a spendable on-chain balance, plus
 - The FFI exposes no exit surface and no on-chain send today (`rust/lark-ffi/src/wallet.rs`), so both are new across the whole seam.
 - Assumed: mutinynet's `vtxo_exit_delta` of 144 blocks (~72 minutes, per `docs/liveness-envelope.md`) sets the floor on how fast a drill run can complete.
 - `ExitError` (`bark/bark/src/exit/models/error.rs` in the pinned fork) is a bounded `thiserror` enum of 26 variants deriving `Clone + Debug + PartialEq + Eq`, which is what makes R20a's classification possible rather than string-matching. A pin bump can add variants, so the classifier needs an explicit unexpected fallback rather than an exhaustive match that fails to compile.
-- **Assumed, and worth verifying before U8:** exit and claim transactions pay their fees from the *on-chain* wallet, and boarding a whole balance leaves roughly nothing on-chain (`CONCEPTS.md`: a board pays its fee out of the coins it moves). If both hold, the natural sequence — fund, board everything, exit — lands on `InsufficientFeeToStart`, making the fee-starved stall the most likely stall in practice rather than an edge case. R20b is scoped on this assumption; if it proves wrong, R20b's carve-out is still correct but much rarer.
+- **Verified 2026-08-14, and stronger than first recorded.** `ExitStartState::progress` (`bark/src/exit/progress/states.rs:58-67` in the pinned fork) compares `onchain.get_balance()` against `estimate_exit_cost` and returns `InsufficientFeeToStart` *before the exit leaves its first state*. So a fee shortfall is not a stall that happens partway through — it is a precondition on starting at all, and an exit that fails it has broadcast nothing. A wallet that boarded its whole balance holds roughly nothing on-chain (`CONCEPTS.md`: a board pays its fee out of the coins it moves), so the natural first run — fund, board everything, exit — hits this. R20b is therefore the path a first-time tester meets, not an edge case, which is the reason it earns an action where R18 gives none.
+- bark's own code already separates this case: `InsufficientConfirmedFunds` logs at `warn!` with "can't progress at this time" while every other variant logs at `error!` (`bark/src/exit/mod.rs:472-478`). The category split in R20a follows a line the engine had already drawn.
+- **`estimate_exit_cost` is `pub(crate)`** (`bark/src/exit/progress/util.rs:30`), and no public method on `Exit` exposes an equivalent. This is what blocks R13a, and it also blocks any pre-flight check that would catch a fee shortfall before the holder starts an exit rather than after. Both need a change in the fork or upstream; neither is reachable from this repo.
 
 ### Outstanding Questions
 
@@ -239,9 +246,14 @@ This plan owns one area: VTXO exit through to a spendable on-chain balance, plus
 - Whether the on-chain send offers a fee-rate choice or a single default.
 - ~~Where the exiting-state surface sits on the home screen.~~ Resolved 2026-08-14: it replaces the balance and action area, headlined by time-to-claimable. See the surface Key Decisions.
 
+**Open, and outside this repo to answer**
+
+- Getting `estimate_exit_cost` — or an equivalent public method on `Exit` — exposed upstream in `ark-bitcoin/bark`. Until it exists, R13a keeps the miner fee as an unknown and no pre-flight affordability check is possible, so the first stall a fully-boarded tester meets is one the app can only explain after the fact. **Not yet filed anywhere**; raising it on the upstream tracker is a decision for the maintainer of this repo's fork relationship, not something this plan can close.
+- Whether to carry a fork patch in the meantime. Cheap in isolation — a visibility change plus a pin bump — but it puts this repo's fork ahead of upstream on a surface upstream may shape differently, which is a cost the fork-pin discipline exists to keep visible.
+
 ### Sources / Research
 
-- `composeApp/src/commonMain/kotlin/xyz/lark/app/ui/screens/settings/ExitScreen.kt` — the screen exists; amount, fee, and readiness figures are literals.
+- `composeApp/src/commonMain/kotlin/xyz/lark/app/ui/screens/settings/ExitScreen.kt` — the screen existed with its amount, fee, and readiness figures as literals. Resolved 2026-08-14 (`dc9e77c`); kept here because the Problem Frame is written against that state.
 - `composeApp/src/commonMain/kotlin/xyz/lark/app/state/AppStateMachine.kt:275` — `startExit()` disarms the funding intent and navigates home; no exit is performed. The surrounding comments document the board-during-exit hazard that R8 preserves.
 - `composeApp/src/commonMain/kotlin/xyz/lark/app/core/LarkCore.kt:40-44` — `channels` stays null on every core except the channel-fork gateway.
 - `rust/lark-ffi/src/wallet.rs:71-121` — `open_wallet` calls `Wallet::open`; the public surface has no exit and no on-chain send.
@@ -448,14 +460,16 @@ U4's binary exists but has no recorded run reaching `Claimed` with captaind stop
 - **Requirements:** R20a, R21
 - **Dependencies:** U2, U5, U7 (all landed — this amends their surfaces)
 - **Files:** `rust/lark-ffi/src/wallet.rs`, `composeApp/src/androidMain/kotlin/uniffi/lark_ffi/lark_ffi.kt` (regenerated), `composeApp/src/commonMain/kotlin/xyz/lark/app/core/WalletExit.kt`, `composeApp/src/commonMain/kotlin/xyz/lark/app/core/ffi/LarkSecureStore.kt`, `composeApp/src/commonMain/kotlin/xyz/lark/app/core/ffi/FfiMappers.kt`, `iosApp/iosApp/` Swift implementations
-- **Approach:** Classify `ExitError` into the four R20a categories inside the crate and carry the category on `ExitStatusInfo` alongside the existing message, which becomes log-only. Match on the variant groups rather than the whole 26-variant set, with an explicit unexpected arm so a pin bump that adds variants still compiles — an exhaustive match here is a liability, not a safety net. Widen `WalletExit`'s `reason: String?` to carry the category. Add a completion-timestamp member to `LarkSecureStore` beside `loadFundingArmedAt` / `storeFundingArmedAt`, whose shape and rationale it copies exactly.
+- **Approach:** Classify `ExitError` into the R20a categories inside the crate and carry the category on `ExitStatusInfo` alongside the existing message, which becomes log-only. Match on the variant groups rather than the whole 26-variant set, with an explicit unexpected arm so a pin bump that adds variants still compiles (R20c) — an exhaustive match here is a liability, not a safety net. Widen `WalletExit`'s `reason: String?` to carry the category. Add a completion-timestamp member to `LarkSecureStore` beside `loadFundingArmedAt` / `storeFundingArmedAt`, whose shape and rationale it copies exactly. Also expose the two chain figures the screens need and cannot otherwise reach: the exit delta as an optional (null when no server can be asked) and the exit's claimable height, carried on the status because it is read on the same poll.
 - **Patterns to follow:** `LarkSecureStore`'s existing funding-intent pair for the persisted-timestamp shape; the `FfiMappers` record-to-seam-type mapping already written for exit status; the delegate's report-exactly-once contract for any new transport member.
 - **Hazards:** the Kotlin bindings are committed and drift-checked — regenerate with `scripts/generate-bindings.sh` and commit the diff rather than hand-editing. `LarkSecureStore` is platform-implemented, so a new member breaks the iOS build until the Swift side implements it.
 - **Test scenarios:**
-  - Each of the four categories is produced by at least one representative `ExitError` variant.
+  - Each category is produced by at least one representative `ExitError` variant.
   - An unrecognised or newly-added variant maps to the unexpected category rather than failing to compile or panicking.
+  - When VTXOs disagree, the category with an action outranks the ones without — a clearable stall is never hidden behind a transient one.
   - The engine's raw message is retained on the status but is not the field the seam exposes as the reason.
   - A stored completion timestamp survives a simulated process restart; an absent one reads as never-shown.
+  - The exit delta reports null rather than a default when no server can be asked.
 - **Verification:** `cargo test` in `rust/lark-ffi` passes; `bash scripts/generate-bindings.sh` leaves no diff; `./gradlew :composeApp:testDebugUnitTest :composeApp:linkDebugFrameworkIosSimulatorArm64` passes.
 
 ### U8. Exit and on-chain send screens
@@ -465,17 +479,18 @@ U4's binary exists but has no recorded run reaching `Claimed` with captaind stop
 - **Dependencies:** U6, U7, U9
 - **Files:** `composeApp/src/commonMain/kotlin/xyz/lark/app/ui/screens/settings/ExitScreen.kt`, `composeApp/src/commonMain/kotlin/xyz/lark/app/ui/screens/home/`, `composeApp/src/commonMain/kotlin/xyz/lark/app/core/gateway/SendInput.kt`, `composeApp/src/commonMain/kotlin/xyz/lark/app/core/gateway/GatewayMappers.kt`, the review screen under `ui/screens/send/`, a new completion-receipt screen, `composeApp/src/commonTest/kotlin/xyz/lark/app/ui/`
 - **Approach:** Five pieces, settled by the 2026-08-14 surface decisions.
-  1. **Honest figures on the exit screen.** Replace the literal miner fee and readiness at `ExitScreen.kt:87-89` with a quote from the path U3 exposes and an estimate derived from the exit delta against the network's block spacing. No routing change — `AdvancedScreen.kt:121` is already the sole caller of `Route.EXIT` and stays that way.
+  1. **Honest figures on the exit screen.** *(Landed 2026-08-14 — `dc9e77c`.)* Replace the literals at `ExitScreen.kt:87-89`. The fee is an unknown (R13a): U3's quote path prices an on-chain *send*, not an exit, and nothing above the engine can price an exit at all. The wait is derived from the exit delta at the network's real spacing, and is an unknown whenever no server can supply the delta (R13b). No routing change — `AdvancedScreen.kt:121` remains the sole caller of `Route.EXIT`, now via a machine intent that reads the delta on the way.
   2. **The exiting surface.** Replaces the home balance and action area while exiting. Headline is time-to-claimable; beneath it the amount leaving and the amount landed so far, then the four states in plain language. Send and receive unavailable.
-  3. **The stalled treatment.** Second headline state on the same surface: the category takes the headline, elapsed-since-stall drops to the subline, the stalled step is marked. Copy is written per R20a category, not per `ExitError` variant — four strings, not twenty-six. The fee-starved category additionally offers the deposit route (R20b); no other category offers anything.
+  3. **The stalled treatment.** Second headline state on the same surface: the category takes the headline, elapsed-since-stall drops to the subline, the stalled step is marked. Copy is written per R20a category, not per `ExitError` variant — five strings, not twenty-six. The fee-starved category additionally offers the deposit route (R20b); no other category offers anything. Which categories carry an action is read from the seam rather than decided here, so the UI cannot drift from the classification.
   4. **The completion receipt.** One-time screen shown before ordinary home on leaving exiting mode: amount landed, miner fee, elapsed, single dismissal. Reads and writes the completion timestamp U9 adds to `LarkSecureStore`.
   5. **On-chain as a destination kind.** `classifySendInput` gains an on-chain branch and `REVIEW` gains a route row and quoted fee; keypad, sending, sent, and failed are reused unchanged. This also closes a live defect: `ARK_ADDRESS_SHAPE` (`GatewayMappers.kt:116`) matches `tb1q…`, so an on-chain address currently passes `isPayableDestination` (`SendInput.kt:56-60`) and fails downstream at `bark::ark::Address::from_str` (`wallet.rs:237`).
 - **Patterns to follow:** the existing `SurfaceCard` / `ExitRow` composition in `ExitScreen.kt`; the Advanced screen's real-countdown rendering for expiry, which already computes at the network's actual block spacing; `AttentionBanner` (`HomeSections.kt:52`) for tone, though the exiting surface is a takeover rather than a banner.
 - **Hazards:** mutinynet's 30-second blocks — any height-to-duration conversion here takes the spacing explicitly or lands 20× wrong (`AGENTS.md`). And no fabricated numbers: the spendable balance during an exit is genuinely nothing, so it is not rendered as `0`.
 - **Test scenarios:**
   - The exit screen renders the wallet's actual spendable amount, not a constant.
-  - The exit screen's miner fee comes from the quote path and changes when the quote changes.
+  - The exit screen's miner fee reads as unknown and never as a number, until the engine exposes a cost estimate.
   - The readiness estimate is derived from the exit delta and block spacing, at the network's real spacing rather than a Bitcoin-default assumption.
+  - With no reachable server the readiness estimate reads as unknown rather than falling back to a default.
   - Covers AE8. In `AwaitingDelta` the surface headlines time-to-claimable and replaces the balance and action area.
   - Covers AE8a. In `Processing` and `Claimable` the headline names the state and shows no figure.
   - Send and receive are not offered while exiting.
@@ -504,10 +519,10 @@ U4's binary exists but has no recorded run reaching `Claimed` with captaind stop
 
 ## Definition of Done
 
-- Every requirement R1–R24 (including R20a, R20b) is implemented or explicitly deferred in writing.
-- Acceptance examples AE1–AE12 (including AE8a, AE9a, AE9b) have corresponding passing tests.
+- Every requirement R1–R24 (including R13a, R13b, R20a, R20b, R20c) is implemented or explicitly deferred in writing.
+- Acceptance examples AE1–AE12 (including AE7a, AE7b, AE8a, AE9a, AE9b) have corresponding passing tests.
+- The exit screen shows no hardcoded amount, fee, or duration — and no invented one either: a figure the app cannot derive reads as unknown.
 - The exit drill reaches a claimed exit with captaind stopped, and its output is recorded.
 - Sats from an exit reach an address named by the holder, through the general on-chain send.
-- The exit screen shows no hardcoded amount, fee, or duration.
 - `bash scripts/ci.sh` passes with the FFI lane verified rather than skipped.
 - `docs/liveness-envelope.md` no longer lists unilateral exit as a missing fallback.
