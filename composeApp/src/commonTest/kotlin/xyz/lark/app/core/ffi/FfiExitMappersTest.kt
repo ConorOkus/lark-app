@@ -10,21 +10,19 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private fun reported(
-    stage: FfiExitStage = FfiExitStage.PROCESSING,
-    vtxoCount: Int = 3,
-    claimedCount: Int = 0,
-    totalSat: Long = 250_000L,
-    errors: List<String> = emptyList(),
-    stallCategory: FfiExitStallCategory? = null,
-) = FfiExitStatus(
-    stage = stage,
-    vtxoCount = vtxoCount,
-    claimedCount = claimedCount,
-    totalSat = totalSat,
-    errors = errors,
-    stallCategory = stallCategory,
+/**
+ * A mid-exit pass. Tests vary one field at a time with `copy`, which keeps this from growing a
+ * parameter per field the crate's record gains.
+ */
+private val REPORTED = FfiExitStatus(
+    stage = FfiExitStage.PROCESSING,
+    vtxoCount = 3,
+    claimedCount = 0,
+    totalSat = 250_000L,
+    errors = emptyList(),
 )
+
+private fun reported() = REPORTED
 
 /** Mapping the crate's exit report into the seam's, including the app's stall policy. */
 class FfiExitMappersTest {
@@ -58,7 +56,7 @@ class FfiExitMappersTest {
     @Test
     fun a_claimed_exit_reports_nothing_left_in_flight() {
         val status = assertNotNull(
-            reported(stage = FfiExitStage.CLAIMED, claimedCount = 3, totalSat = 250_000L)
+            REPORTED.copy(stage = FfiExitStage.CLAIMED, claimedCount = 3, totalSat = 250_000L)
                 .toExitStatus(consecutiveFailures = 0),
         )
         assertEquals(0L, status.inFlightSats)
@@ -75,18 +73,18 @@ class FfiExitMappersTest {
     @Test
     fun a_stall_raises_only_at_the_threshold() {
         val below = assertNotNull(
-            reported(errors = listOf("boom")).toExitStatus(EXIT_STALL_THRESHOLD - 1),
+            REPORTED.copy(errors = listOf("boom")).toExitStatus(EXIT_STALL_THRESHOLD - 1),
         )
         assertFalse(below.stalled)
 
-        val at = assertNotNull(reported(errors = listOf("boom")).toExitStatus(EXIT_STALL_THRESHOLD))
+        val at = assertNotNull(REPORTED.copy(errors = listOf("boom")).toExitStatus(EXIT_STALL_THRESHOLD))
         assertTrue(at.stalled)
     }
 
     @Test
     fun the_category_becomes_the_reason() {
         val status = assertNotNull(
-            reported(stallCategory = FfiExitStallCategory.CHAIN_UNREACHABLE)
+            REPORTED.copy(stallCategory = FfiExitStallCategory.CHAIN_UNREACHABLE)
                 .toExitStatus(consecutiveFailures = 1),
         )
         assertEquals(ExitStallReason.CHAIN_UNREACHABLE, status.reason)
@@ -99,7 +97,7 @@ class FfiExitMappersTest {
     @Test
     fun the_engines_message_never_becomes_the_reason() {
         val status = assertNotNull(
-            reported(errors = listOf("f00dbabe…: Database Store Failure: …"))
+            REPORTED.copy(errors = listOf("f00dbabe…: Database Store Failure: …"))
                 .toExitStatus(consecutiveFailures = 1),
         )
         assertNull(status.reason)
@@ -126,7 +124,7 @@ class FfiExitMappersTest {
     @Test
     fun an_unsupported_stage_still_counts_as_exiting() {
         val status = assertNotNull(
-            reported(stage = FfiExitStage.UNSUPPORTED).toExitStatus(consecutiveFailures = 0),
+            REPORTED.copy(stage = FfiExitStage.UNSUPPORTED).toExitStatus(consecutiveFailures = 0),
         )
         assertTrue(status.isExiting, "a parked channel exit has not left the Ark")
     }

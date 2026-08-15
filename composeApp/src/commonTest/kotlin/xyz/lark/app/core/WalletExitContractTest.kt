@@ -72,7 +72,7 @@ class WalletExitContractTest {
 
     @Test
     fun a_stall_raises_only_at_the_threshold() = runTest {
-        val exit = FakeWalletExit(failingPasses = EXIT_STALL_THRESHOLD)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = EXIT_STALL_THRESHOLD))
         exit.startExit()
 
         repeat(EXIT_STALL_THRESHOLD - 1) {
@@ -84,7 +84,7 @@ class WalletExitContractTest {
 
     @Test
     fun a_stall_clears_when_progress_resumes_without_leaving_the_mode() = runTest {
-        val exit = FakeWalletExit(failingPasses = EXIT_STALL_THRESHOLD)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = EXIT_STALL_THRESHOLD))
         exit.startExit()
         repeat(EXIT_STALL_THRESHOLD) { exit.progressExit() }
         assertTrue(exit.exitStatus.stalled)
@@ -97,7 +97,7 @@ class WalletExitContractTest {
 
     @Test
     fun a_stall_does_not_advance_the_stage() = runTest {
-        val exit = FakeWalletExit(failingPasses = 2)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = 2))
         exit.startExit()
         val before = exit.exitStatus.stage
 

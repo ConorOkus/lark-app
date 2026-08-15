@@ -16,8 +16,42 @@ package xyz.lark.app.core.format
 /** Em-dash for an expiry that is not yet knowable; never a fabricated countdown. */
 internal const val EXPIRY_PLACEHOLDER = "—"
 
+private const val SECONDS_PER_MINUTE = 60L
 private const val SECONDS_PER_HOUR = 3_600L
 private const val SECONDS_PER_DAY = 86_400L
+
+/**
+ * mutinynet's block target, in seconds.
+ *
+ * Stated as a named constant because every height-to-time conversion has to take spacing
+ * explicitly: this chain is 20x faster than Bitcoin's target, so a helper that quietly assumed
+ * 10-minute blocks would overstate every wait by that factor.
+ */
+internal const val MUTINYNET_BLOCK_SECONDS = 30
+
+/**
+ * A block count as an approximate wait: `about 4 minutes`, `about 3 hours`, `about 2 days`.
+ *
+ * Distinct from [blockExpiryLabel] in two ways that matter. It carries no height — a user waiting
+ * on an exit is asking "how long", not "until which block" — and it resolves minutes, because an
+ * exit delta on a 30-second chain is a bit over an hour, and rounding that to the nearest hour
+ * throws away most of the answer.
+ *
+ * Null [blocks] returns [EXPIRY_PLACEHOLDER]. That is the honest rendering of a wait this build
+ * cannot compute, and callers must not substitute a default in its place.
+ */
+internal fun approxDurationLabel(blocks: Long?, secondsPerBlock: Int): String = when {
+    blocks == null -> EXPIRY_PLACEHOLDER
+    blocks <= 0 -> "any moment now"
+    else -> "about " + spelled(blocks * secondsPerBlock)
+}
+
+/** The unit choice, split out so the label above stays a single expression. */
+private fun spelled(seconds: Long): String = when {
+    seconds < SECONDS_PER_HOUR -> counted(maxOf(1L, seconds / SECONDS_PER_MINUTE), "minute")
+    seconds < SECONDS_PER_DAY -> counted(maxOf(1L, seconds / SECONDS_PER_HOUR), "hour")
+    else -> counted(seconds / SECONDS_PER_DAY, "day")
+}
 
 /**
  * One expiry height in the block-countdown voice, or [EXPIRY_PLACEHOLDER] while either the height

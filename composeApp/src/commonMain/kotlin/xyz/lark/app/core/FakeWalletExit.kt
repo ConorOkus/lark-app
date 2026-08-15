@@ -20,12 +20,12 @@ class FakeWalletExit(
     private val script: List<ExitStage> = DEFAULT_SCRIPT,
     private val vtxoCount: Int = 3,
     private val inFlightSats: Long = 250_000L,
-    private var failingPasses: Int = 0,
-    private val failureReason: ExitStallReason = ExitStallReason.CHAIN_UNREACHABLE,
-    private val deltaBlocks: Int? = null,
-    private val claimableAtHeight: Long? = null,
+    private val failure: FakeExitFailure = FakeExitFailure(),
+    private val heights: FakeExitHeights = FakeExitHeights(),
     startedAlready: Boolean = false,
 ) : WalletExit {
+
+    private var failingPasses = failure.passes
 
     private var index = if (startedAlready) 0 else NOT_STARTED
     private var consecutiveFailures = 0
@@ -54,7 +54,7 @@ class FakeWalletExit(
             consecutiveFailures++
             statusAt(index).copy(
                 stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
-                reason = failureReason,
+                reason = failure.reason,
             )
         } else {
             consecutiveFailures = 0
@@ -69,7 +69,7 @@ class FakeWalletExit(
      * here: it is both the scenario exit exists for and the one where a screen is most likely to
      * be handed an unknown it must not render as a number.
      */
-    override suspend fun exitDeltaBlocks(): Int? = deltaBlocks
+    override suspend fun exitDeltaBlocks(): Int? = heights.deltaBlocks
 
     private fun statusAt(at: Int): ExitStatus {
         val stage = script[at]
@@ -79,9 +79,34 @@ class FakeWalletExit(
             vtxoCount = vtxoCount,
             claimedCount = claimed,
             inFlightSats = if (stage == ExitStage.CLAIMED) 0 else inFlightSats,
-            claimableAtHeight = claimableAtHeight,
+            claimableAtHeight = heights.claimableAtHeight,
         )
     }
+
+    /**
+     * How a scripted exit fails: for how many consecutive passes, and as what.
+     *
+     * The two travel together because neither is useful alone — a stall with no category cannot
+     * exercise the surface that reads one, and a category with no passes never raises a stall.
+     * [reason] matters because the categories are not interchangeable to the app: only
+     * [ExitStallReason.NEEDS_ONCHAIN_FUNDS] comes with an action, so a test that cannot choose the
+     * category cannot cover the branch that offers one.
+     */
+    data class FakeExitFailure(
+        val passes: Int = 0,
+        val reason: ExitStallReason = ExitStallReason.CHAIN_UNREACHABLE,
+    )
+
+    /**
+     * The two chain-derived figures an exit can report, grouped because they answer the same
+     * question at different times: what a wait *would* be before an exit exists, and what it *is*
+     * once one does. Both default to null — the no-server case, which is the one worth defaulting
+     * to for a feature that exists for it.
+     */
+    data class FakeExitHeights(
+        val deltaBlocks: Int? = null,
+        val claimableAtHeight: Long? = null,
+    )
 
     companion object {
         private const val NOT_STARTED = -1

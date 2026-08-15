@@ -202,7 +202,7 @@ class ExitingModeTest {
 
     @Test
     fun a_stall_is_reported_and_the_wallet_keeps_trying() = runTest {
-        val exit = FakeWalletExit(failingPasses = EXIT_STALL_THRESHOLD)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = EXIT_STALL_THRESHOLD))
         val m = machine(exit)
         m.startExit()
         advanceTimeBy(passes(EXIT_STALL_THRESHOLD))
@@ -220,7 +220,7 @@ class ExitingModeTest {
 
     @Test
     fun a_stall_never_offers_a_way_out_of_the_exiting_state() = runTest {
-        val exit = FakeWalletExit(failingPasses = EXIT_STALL_THRESHOLD)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = EXIT_STALL_THRESHOLD))
         val m = machine(exit)
         m.startExit()
         advanceTimeBy(passes(EXIT_STALL_THRESHOLD))
@@ -231,7 +231,7 @@ class ExitingModeTest {
 
     @Test
     fun a_stall_that_clears_stops_being_reported() = runTest {
-        val exit = FakeWalletExit(failingPasses = EXIT_STALL_THRESHOLD)
+        val exit = FakeWalletExit(failure = FakeWalletExit.FakeExitFailure(passes = EXIT_STALL_THRESHOLD))
         val m = machine(exit)
         m.startExit()
         advanceTimeBy(passes(EXIT_STALL_THRESHOLD))

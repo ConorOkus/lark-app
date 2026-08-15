@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.lark.app.state.ExitEstimatesModel
 import xyz.lark.app.ui.components.PillButtonHeight
 import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.components.RowGroupDivider
@@ -42,6 +43,7 @@ private const val LABEL_ALPHA = 0.5f
 @Composable
 fun ExitScreen(
     amount: String,
+    estimates: ExitEstimatesModel,
     onBack: () -> Unit,
     onStart: () -> Unit,
     modifier: Modifier = Modifier,
@@ -72,21 +74,28 @@ fun ExitScreen(
                 style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 25.sp),
                 color = LarkColors.TextPrimary.copy(alpha = BODY_ALPHA),
             )
-            ExitCard(amount = amount)
+            ExitCard(amount = amount, estimates = estimates)
         }
         StartButton(onStart = onStart)
     }
 }
 
-/** The amount / miner fee / readiness surface card. */
+/**
+ * The amount / miner fee / readiness surface card.
+ *
+ * Every figure is supplied rather than written here. Two of the three can legitimately be unknown
+ * — the engine will not price an exit, and the wait comes from an Ark server this screen exists to
+ * do without — and they arrive as an em-dash when they are. That is the point: this card used to
+ * state a fee and a duration as literals, which made a promise the app could not keep.
+ */
 @Composable
-private fun ExitCard(amount: String) {
+private fun ExitCard(amount: String, estimates: ExitEstimatesModel) {
     SurfaceCard(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(0.dp)) {
         ExitRow(label = "Amount", value = amount, tabular = true)
         RowGroupDivider()
-        ExitRow(label = "Miner fee", value = "~$1.80")
+        ExitRow(label = "Miner fee", value = estimates.minerFee, tabular = true)
         RowGroupDivider()
-        ExitRow(label = "Ready to spend in", value = "about 24 hours")
+        ExitRow(label = "Ready to spend in", value = estimates.readyIn)
     }
 }
 

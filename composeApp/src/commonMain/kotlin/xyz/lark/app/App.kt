@@ -209,6 +209,7 @@ private fun HealthRoute(model: AppModel, machine: AppStateMachine) = HealthScree
 @Composable
 private fun ExitRoute(model: AppModel, machine: AppStateMachine) = ExitScreen(
     amount = model.exitAmount, // always unmasked: the screen states what moves on-chain (issue #4)
+    estimates = model.exitEstimates,
     onBack = machine::back,
     onStart = machine::startExit,
 )

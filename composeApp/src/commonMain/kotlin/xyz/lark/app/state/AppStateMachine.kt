@@ -16,7 +16,10 @@ import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
 import xyz.lark.app.core.WalletExit
+import xyz.lark.app.core.format.EXPIRY_PLACEHOLDER
+import xyz.lark.app.core.format.MUTINYNET_BLOCK_SECONDS
 import xyz.lark.app.core.format.MoneyFormat
+import xyz.lark.app.core.format.approxDurationLabel
 // Pure destination classification, kept beside the resolver and invoice parser it composes so the
 // input screen and the send path cannot disagree about what counts as payable.
 import xyz.lark.app.core.gateway.SendInput
@@ -141,6 +144,14 @@ private data class MachineState(
      * pure and the status only changes on a progress pass — which is a suspending call.
      */
     val exit: ExitStatus = ExitStatus.NOT_EXITING,
+    /**
+     * The exit delta in blocks, or null while it is not known.
+     *
+     * Read once on the way to the exit screen rather than on every render, because it is a
+     * suspending call and the value does not move. Null survives as null: a wallet with no
+     * reachable Ark server has no delta to read, and that is the wallet most likely to be here.
+     */
+    val exitDeltaBlocks: Int? = null,
     /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
@@ -278,6 +289,23 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
     fun goFund() {
         core.createWallet()
         push(Route.FUND)
+    }
+
+    /**
+     * Open the exit screen, reading the exit delta on the way so the screen can state a wait.
+     *
+     * The read is fire-and-forget and the screen renders immediately: the delta is one figure on
+     * a screen whose other figures are already known, and blocking the navigation on a call that
+     * may be talking to an unreachable server would be the wrong trade. When it does not arrive
+     * the screen says so, which it has to be able to do anyway.
+     */
+    fun goExit() {
+        push(Route.EXIT)
+        val exit = walletExit ?: return
+        scope.launch {
+            val delta = runCatching { exit.exitDeltaBlocks() }.getOrNull()
+            update { it.copy(exitDeltaBlocks = delta) }
+        }
     }
 
     fun goRestore() = push(Route.RESTORE)
@@ -805,6 +833,15 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             denomination = s.denomination,
             balance = renderBalance(s),
             exitAmount = primary(core.balanceSats.value, s.denomination),
+            exitEstimates = ExitEstimatesModel(
+                // Always unknown today: bark keeps its exit-cost estimate crate-private, so
+                // nothing above the engine can price an exit. Not a guess, and not a hidden row.
+                minerFee = EXPIRY_PLACEHOLDER,
+                readyIn = approxDurationLabel(
+                    blocks = s.exitDeltaBlocks?.toLong(),
+                    secondsPerBlock = MUTINYNET_BLOCK_SECONDS,
+                ),
+            ),
             health = renderHealth(),
             keypad = renderKeypad(s),
             send = renderSend(s),

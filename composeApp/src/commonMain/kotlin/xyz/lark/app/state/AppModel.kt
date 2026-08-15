@@ -176,6 +176,7 @@ data class AppModel(
     val denomination: Denomination,
     val balance: BalanceModel,
     val exitAmount: String,
+    val exitEstimates: ExitEstimatesModel,
     val health: HealthModel,
     val keypad: KeypadModel,
     val send: SendModel,
@@ -202,6 +203,24 @@ data class AppModel(
      * are still in.
      */
     val exiting: ExitingModel?,
+)
+
+/**
+ * The two figures on the exit screen that the app has to work out rather than simply know.
+ *
+ * Grouped because they share the property the amount does not: either can honestly be unknown, and
+ * both arrive as an em-dash when they are. This is the screen that used to state `~$1.80` and
+ * `about 24 hours` as literals, so the type exists partly to make "we might not know this" the
+ * shape of the data rather than a convention someone has to remember.
+ *
+ * [minerFee] is unknown today for everyone: bark keeps its exit-cost estimate crate-private, so
+ * nothing above the engine can price an exit. [readyIn] is unknown whenever the Ark server is
+ * unreachable, because the exit delta lives there and is not persisted — which is exactly the
+ * wallet most likely to be reading this screen.
+ */
+data class ExitEstimatesModel(
+    val minerFee: String,
+    val readyIn: String,
 )
 
 /**
