@@ -578,6 +578,23 @@ public protocol LarkWalletProtocol : AnyObject {
     func encryptStateBlob(plaintext: Data, version: UInt64) throws  -> Data
     
     /**
+     * The exit delta in blocks, or `None` when it cannot be known right now.
+     *
+     * This is how long a started exit must wait out before its funds become claimable, and it is
+     * the only input the app needs to say "ready to spend in …" *before* an exit exists.
+     *
+     * `None` is load-bearing rather than an error case. The delta lives on the Ark server's
+     * `ArkInfo` and bark does not persist it, so a wallet with no reachable server cannot know it
+     * — which is precisely the situation unilateral exit is for. The caller is expected to render
+     * that as an unknown, never to substitute a default: a wrong wait on the screen that
+     * authorises an irreversible spend is worse than no wait at all.
+     *
+     * Once an exit *has* started this stops being needed: the claimable height is persisted with
+     * the exit and readable with no server.
+     */
+    func exitDeltaBlocks() async throws  -> UInt32?
+    
+    /**
      * Where the wallet's exit stands, without advancing it.
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
@@ -921,6 +938,38 @@ open func encryptStateBlob(plaintext: Data, version: UInt64)throws  -> Data {
         FfiConverterUInt64.lower(version),$0
     )
 })
+}
+    
+    /**
+     * The exit delta in blocks, or `None` when it cannot be known right now.
+     *
+     * This is how long a started exit must wait out before its funds become claimable, and it is
+     * the only input the app needs to say "ready to spend in …" *before* an exit exists.
+     *
+     * `None` is load-bearing rather than an error case. The delta lives on the Ark server's
+     * `ArkInfo` and bark does not persist it, so a wallet with no reachable server cannot know it
+     * — which is precisely the situation unilateral exit is for. The caller is expected to render
+     * that as an unknown, never to substitute a default: a wrong wait on the screen that
+     * authorises an irreversible spend is worse than no wait at all.
+     *
+     * Once an exit *has* started this stops being needed: the claimable height is persisted with
+     * the exit and readable with no server.
+     */
+open func exitDeltaBlocks()async throws  -> UInt32? {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_exit_delta_blocks(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionUInt32.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
 }
     
     /**
@@ -1356,19 +1405,35 @@ public struct ExitStatusInfo {
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
      */
     public var stallCategory: ExitStallCategory?
+    /**
+     * The height at which every exiting VTXO becomes claimable, or `None` when not yet known.
+     *
+     * Persisted with the exit, so this answers with no Ark server and no chain source. That is
+     * what lets an in-flight exit show a real countdown in the scenario the feature exists for,
+     * where the exit delta itself is unknowable because it lives on a server that is gone.
+     */
+    public var claimableAtHeight: UInt32?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, errors: [String], 
         /**
          * The category speaking for the wallet this pass, or `None` when nothing went wrong.
-         */stallCategory: ExitStallCategory?) {
+         */stallCategory: ExitStallCategory?, 
+        /**
+         * The height at which every exiting VTXO becomes claimable, or `None` when not yet known.
+         *
+         * Persisted with the exit, so this answers with no Ark server and no chain source. That is
+         * what lets an in-flight exit show a real countdown in the scenario the feature exists for,
+         * where the exit delta itself is unknowable because it lives on a server that is gone.
+         */claimableAtHeight: UInt32?) {
         self.stage = stage
         self.vtxoCount = vtxoCount
         self.claimedCount = claimedCount
         self.totalSat = totalSat
         self.errors = errors
         self.stallCategory = stallCategory
+        self.claimableAtHeight = claimableAtHeight
     }
 }
 
@@ -1394,6 +1459,9 @@ extension ExitStatusInfo: Equatable, Hashable {
         if lhs.stallCategory != rhs.stallCategory {
             return false
         }
+        if lhs.claimableAtHeight != rhs.claimableAtHeight {
+            return false
+        }
         return true
     }
 
@@ -1404,6 +1472,7 @@ extension ExitStatusInfo: Equatable, Hashable {
         hasher.combine(totalSat)
         hasher.combine(errors)
         hasher.combine(stallCategory)
+        hasher.combine(claimableAtHeight)
     }
 }
 
@@ -1420,7 +1489,8 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
                 claimedCount: FfiConverterUInt32.read(from: &buf), 
                 totalSat: FfiConverterUInt64.read(from: &buf), 
                 errors: FfiConverterSequenceString.read(from: &buf), 
-                stallCategory: FfiConverterOptionTypeExitStallCategory.read(from: &buf)
+                stallCategory: FfiConverterOptionTypeExitStallCategory.read(from: &buf), 
+                claimableAtHeight: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
@@ -1431,6 +1501,7 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.totalSat, into: &buf)
         FfiConverterSequenceString.write(value.errors, into: &buf)
         FfiConverterOptionTypeExitStallCategory.write(value.stallCategory, into: &buf)
+        FfiConverterOptionUInt32.write(value.claimableAtHeight, into: &buf)
     }
 }
 
@@ -2628,6 +2699,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_exit_delta_blocks() != 39854) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 15134) {

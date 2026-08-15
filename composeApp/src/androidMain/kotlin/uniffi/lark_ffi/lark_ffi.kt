@@ -779,6 +779,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -816,6 +818,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_encrypt_state_blob(`ptr`: Pointer,`plaintext`: RustBuffer.ByValue,`version`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_lark_ffi_fn_method_larkwallet_exit_delta_blocks(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_exit_status(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_export_state_blob_plaintext(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1000,6 +1004,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_exit_delta_blocks(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_exit_status(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_export_state_blob_plaintext(
@@ -1087,6 +1093,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_encrypt_state_blob() != 53000.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_exit_delta_blocks() != 39854.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_exit_status() != 15134.toShort()) {
@@ -1607,6 +1616,23 @@ public interface LarkWalletInterface {
     fun `encryptStateBlob`(`plaintext`: kotlin.ByteArray, `version`: kotlin.ULong): kotlin.ByteArray
     
     /**
+     * The exit delta in blocks, or `None` when it cannot be known right now.
+     *
+     * This is how long a started exit must wait out before its funds become claimable, and it is
+     * the only input the app needs to say "ready to spend in …" *before* an exit exists.
+     *
+     * `None` is load-bearing rather than an error case. The delta lives on the Ark server's
+     * `ArkInfo` and bark does not persist it, so a wallet with no reachable server cannot know it
+     * — which is precisely the situation unilateral exit is for. The caller is expected to render
+     * that as an unknown, never to substitute a default: a wrong wait on the screen that
+     * authorises an irreversible spend is worse than no wait at all.
+     *
+     * Once an exit *has* started this stops being needed: the claimable height is persisted with
+     * the exit and readable with no server.
+     */
+    suspend fun `exitDeltaBlocks`(): kotlin.UInt?
+    
+    /**
      * Where the wallet's exit stands, without advancing it.
      *
      * A local read over persisted state, so it answers with no server and no chain source and is
@@ -2012,6 +2038,42 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
     )
     }
     
+
+    
+    /**
+     * The exit delta in blocks, or `None` when it cannot be known right now.
+     *
+     * This is how long a started exit must wait out before its funds become claimable, and it is
+     * the only input the app needs to say "ready to spend in …" *before* an exit exists.
+     *
+     * `None` is load-bearing rather than an error case. The delta lives on the Ark server's
+     * `ArkInfo` and bark does not persist it, so a wallet with no reachable server cannot know it
+     * — which is precisely the situation unilateral exit is for. The caller is expected to render
+     * that as an unknown, never to substitute a default: a wrong wait on the screen that
+     * authorises an irreversible spend is worse than no wait at all.
+     *
+     * Once an exit *has* started this stops being needed: the claimable height is persisted with
+     * the exit and readable with no server.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `exitDeltaBlocks`() : kotlin.UInt? {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_exit_delta_blocks(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalUInt.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
 
     
     /**
@@ -2494,7 +2556,15 @@ data class ExitStatusInfo (
     /**
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
      */
-    var `stallCategory`: ExitStallCategory?
+    var `stallCategory`: ExitStallCategory?, 
+    /**
+     * The height at which every exiting VTXO becomes claimable, or `None` when not yet known.
+     *
+     * Persisted with the exit, so this answers with no Ark server and no chain source. That is
+     * what lets an in-flight exit show a real countdown in the scenario the feature exists for,
+     * where the exit delta itself is unknowable because it lives on a server that is gone.
+     */
+    var `claimableAtHeight`: kotlin.UInt?
 ) {
     
     companion object
@@ -2512,6 +2582,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterULong.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalTypeExitStallCategory.read(buf),
+            FfiConverterOptionalUInt.read(buf),
         )
     }
 
@@ -2521,7 +2592,8 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.allocationSize(value.`claimedCount`) +
             FfiConverterULong.allocationSize(value.`totalSat`) +
             FfiConverterSequenceString.allocationSize(value.`errors`) +
-            FfiConverterOptionalTypeExitStallCategory.allocationSize(value.`stallCategory`)
+            FfiConverterOptionalTypeExitStallCategory.allocationSize(value.`stallCategory`) +
+            FfiConverterOptionalUInt.allocationSize(value.`claimableAtHeight`)
     )
 
     override fun write(value: ExitStatusInfo, buf: ByteBuffer) {
@@ -2531,6 +2603,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterULong.write(value.`totalSat`, buf)
             FfiConverterSequenceString.write(value.`errors`, buf)
             FfiConverterOptionalTypeExitStallCategory.write(value.`stallCategory`, buf)
+            FfiConverterOptionalUInt.write(value.`claimableAtHeight`, buf)
     }
 }
 

@@ -190,6 +190,15 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in Self.mapExit(try await wallet.exitStatus()) }
     }
 
+    /// Nil here means the delta is genuinely unknowable — no server to ask — not that the call
+    /// failed. The adapter treats both the same way, because a screen must render either as an
+    /// unknown rather than guessing a wait for an irreversible operation.
+    func exitDeltaBlocks(onResult: @escaping (KotlinLong?, String?) -> Void) {
+        performOptional(onResult) { wallet in
+            try await wallet.exitDeltaBlocks().map { KotlinLong(value: Int64($0)) }
+        }
+    }
+
     func onchainSend(address: String, sats: Int64, onResult: @escaping (String?, String?) -> Void) {
         perform(onResult) { wallet in
             try await wallet.onchainSend(address: address, sats: UInt64(sats))
@@ -243,7 +252,8 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
             claimedCount: Int32(status.claimedCount),
             totalSat: Int64(status.totalSat),
             errors: status.errors,
-            stallCategory: category
+            stallCategory: category,
+            claimableAtHeight: status.claimableAtHeight.map { KotlinLong(value: Int64($0)) }
         )
     }
 
@@ -268,6 +278,32 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
                 // The adapter above turns every failure into the same coarse seam outcome, so this
                 // is the only place a cause survives. A wallet that says "that didn't go through"
                 // with the reason nowhere on record is undebuggable in the field as well as here.
+                NSLog("lark: %@ failed: %@", name, "\(error)")
+                onResult(nil, "\(error)")
+            }
+        }
+    }
+
+    /// `perform` for a call whose success value may legitimately be nothing.
+    ///
+    /// `perform` spends nil on "this failed", so it cannot express an answer that is both
+    /// successful and absent. The exit delta is exactly that: a wallet with no reachable Ark
+    /// server has no delta to report, and that is the normal case for unilateral exit rather than
+    /// an error. Both still arrive at the caller as nil — the distinction that matters is only
+    /// that the failure path logs a cause and this one does not invent one.
+    private func performOptional<T>(
+        _ onResult: @escaping (T?, String?) -> Void,
+        name: String = #function,
+        _ body: @escaping (LarkWallet) async throws -> T?
+    ) {
+        guard let wallet = currentWallet else {
+            onResult(nil, Self.notOpenMessage)
+            return
+        }
+        Task.detached {
+            do {
+                onResult(try await body(wallet), nil)
+            } catch {
                 NSLog("lark: %@ failed: %@", name, "\(error)")
                 onResult(nil, "\(error)")
             }

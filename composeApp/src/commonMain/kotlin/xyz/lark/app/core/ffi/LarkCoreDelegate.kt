@@ -143,6 +143,15 @@ interface LarkCoreDelegate {
     fun exitStatus(onResult: (status: FfiExitStatus?, error: String?) -> Unit)
 
     /**
+     * How many blocks a started exit must wait out, or null when it cannot be known.
+     *
+     * Null is a real answer, not a failure: the delta lives on the Ark server and bark does not
+     * persist it, so a wallet with no reachable server cannot know it — the exact situation this
+     * whole feature exists for. Callers render null as unknown and never substitute a default.
+     */
+    fun exitDeltaBlocks(onResult: (blocks: Long?, error: String?) -> Unit)
+
+    /**
      * Spend on-chain funds to [address].
      *
      * Not exit-specific: exit proceeds, an unspent board, and leftover change all leave this way.
@@ -209,6 +218,8 @@ data class FfiExitStatus(
     val totalSat: Long,
     val errors: List<String>,
     val stallCategory: FfiExitStallCategory? = null,
+    /** Height at which every exiting VTXO becomes claimable; null until the exit knows. */
+    val claimableAtHeight: Long? = null,
 )
 
 /**

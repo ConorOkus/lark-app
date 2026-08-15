@@ -42,6 +42,7 @@ internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? 
         // The engine's message deliberately does not cross: `errors` holds VTXO ids and the
         // engine's own wording, and the seam's reason is what a headline renders.
         reason = reported.stallCategory?.toExitStallReason(),
+        claimableAtHeight = reported.claimableAtHeight,
     )
 }
 

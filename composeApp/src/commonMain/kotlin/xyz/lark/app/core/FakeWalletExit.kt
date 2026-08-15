@@ -22,6 +22,8 @@ class FakeWalletExit(
     private val inFlightSats: Long = 250_000L,
     private var failingPasses: Int = 0,
     private val failureReason: ExitStallReason = ExitStallReason.CHAIN_UNREACHABLE,
+    private val deltaBlocks: Int? = null,
+    private val claimableAtHeight: Long? = null,
     startedAlready: Boolean = false,
 ) : WalletExit {
 
@@ -62,6 +64,13 @@ class FakeWalletExit(
         return exitStatus
     }
 
+    /**
+     * Null by default, because a wallet with no reachable server is the case worth defaulting to
+     * here: it is both the scenario exit exists for and the one where a screen is most likely to
+     * be handed an unknown it must not render as a number.
+     */
+    override suspend fun exitDeltaBlocks(): Int? = deltaBlocks
+
     private fun statusAt(at: Int): ExitStatus {
         val stage = script[at]
         val claimed = if (stage == ExitStage.CLAIMED) vtxoCount else 0
@@ -70,6 +79,7 @@ class FakeWalletExit(
             vtxoCount = vtxoCount,
             claimedCount = claimed,
             inFlightSats = if (stage == ExitStage.CLAIMED) 0 else inFlightSats,
+            claimableAtHeight = claimableAtHeight,
         )
     }
 

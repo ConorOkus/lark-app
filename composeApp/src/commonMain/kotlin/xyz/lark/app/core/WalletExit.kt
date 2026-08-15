@@ -41,6 +41,20 @@ interface WalletExit {
      * Safe to call when nothing is exiting; it returns [ExitStatus.NOT_EXITING] without effect.
      */
     suspend fun progressExit(): ExitStatus
+
+    /**
+     * How many blocks a started exit must wait out, or null when it cannot be known.
+     *
+     * Needed only *before* an exit exists, to estimate how long one would take. Once an exit is
+     * running its claimable height is persisted and [ExitStatus.claimableAtHeight] answers without
+     * this.
+     *
+     * Null is an honest answer rather than a failure: the delta lives on the Ark server, so a
+     * wallet that cannot reach one cannot know it — which is exactly the wallet most likely to be
+     * reading an exit screen. Callers show an unknown; substituting a default would put a wrong
+     * wait under a button that cannot be taken back.
+     */
+    suspend fun exitDeltaBlocks(): Int?
 }
 
 /**
@@ -126,6 +140,13 @@ data class ExitStatus(
     val inFlightSats: Long = 0,
     val stalled: Boolean = false,
     val reason: ExitStallReason? = null,
+    /**
+     * Height at which every exiting VTXO becomes claimable, or null while the exit does not know.
+     *
+     * Persisted with the exit, so it survives the Ark server being gone — which is what lets an
+     * in-flight exit show a real countdown when [exitDeltaBlocks] cannot be answered at all.
+     */
+    val claimableAtHeight: Long? = null,
 ) {
     /** Whether the wallet is in the exiting state, and so cannot send, receive, or board. */
     val isExiting: Boolean get() = stage != ExitStage.NONE && stage != ExitStage.CLAIMED

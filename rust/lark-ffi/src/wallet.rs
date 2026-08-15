@@ -383,7 +383,26 @@ impl LarkWallet {
                 })
             })
             .unzip();
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors, &categories))
+        let claimable_at = exit.all_claimable_at_height().await.map(|h| h as u32);
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors, &categories, claimable_at))
+    }
+
+    /// The exit delta in blocks, or `None` when it cannot be known right now.
+    ///
+    /// This is how long a started exit must wait out before its funds become claimable, and it is
+    /// the only input the app needs to say "ready to spend in …" *before* an exit exists.
+    ///
+    /// `None` is load-bearing rather than an error case. The delta lives on the Ark server's
+    /// `ArkInfo` and bark does not persist it, so a wallet with no reachable server cannot know it
+    /// — which is precisely the situation unilateral exit is for. The caller is expected to render
+    /// that as an unknown, never to substitute a default: a wrong wait on the screen that
+    /// authorises an irreversible spend is worse than no wait at all.
+    ///
+    /// Once an exit *has* started this stops being needed: the claimable height is persisted with
+    /// the exit and readable with no server.
+    pub async fn exit_delta_blocks(&self) -> Result<Option<u32>, LarkError> {
+        let info = self.inner.ark_info().await.map_err(LarkError::from)?;
+        Ok(info.map(|i| u32::from(i.vtxo_exit_delta)))
     }
 
     /// Where the wallet's exit stands, without advancing it.
@@ -396,7 +415,8 @@ impl LarkWallet {
     /// pass observed.
     pub async fn exit_status(&self) -> Result<ExitStatusInfo, LarkError> {
         let exit = self.inner.exit.read().await;
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new(), &[]))
+        let claimable_at = exit.all_claimable_at_height().await.map(|h| h as u32);
+        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new(), &[], claimable_at))
     }
 
     /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
@@ -664,6 +684,12 @@ pub struct ExitStatusInfo {
     pub errors: Vec<String>,
     /// The category speaking for the wallet this pass, or `None` when nothing went wrong.
     pub stall_category: Option<ExitStallCategory>,
+    /// The height at which every exiting VTXO becomes claimable, or `None` when not yet known.
+    ///
+    /// Persisted with the exit, so this answers with no Ark server and no chain source. That is
+    /// what lets an in-flight exit show a real countdown in the scenario the feature exists for,
+    /// where the exit delta itself is unknowable because it lives on a server that is gone.
+    pub claimable_at_height: Option<u32>,
 }
 
 impl ExitStatusInfo {
@@ -671,6 +697,7 @@ impl ExitStatusInfo {
         vtxos: &[ExitVtxo],
         errors: Vec<String>,
         categories: &[ExitStallCategory],
+        claimable_at_height: Option<u32>,
     ) -> Self {
         let stages: Vec<ExitStage> = vtxos.iter().map(|v| ExitStage::from(v.state())).collect();
         ExitStatusInfo {
@@ -680,6 +707,7 @@ impl ExitStatusInfo {
             total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
             errors,
             stall_category: ExitStallCategory::aggregate(categories),
+            claimable_at_height,
         }
     }
 }

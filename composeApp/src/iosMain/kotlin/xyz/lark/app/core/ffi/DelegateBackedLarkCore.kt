@@ -220,6 +220,14 @@ class DelegateBackedLarkCore(
         return exitStatus
     }
 
+    /**
+     * Null when the crate cannot answer, which includes both "no server to ask" and a failed call.
+     * Both are the same fact to a caller — the delta is not known — and neither may become a
+     * number on screen.
+     */
+    override suspend fun exitDeltaBlocks(): Int? =
+        delegate.awaitValue<Long> { onResult -> exitDeltaBlocks(onResult) }?.toInt()
+
     /** Re-read the exit without advancing it, for the status the machine resumes from. */
     private suspend fun refreshExitStatus() {
         val reported = delegate.awaitValue<FfiExitStatus> { onResult -> exitStatus(onResult) }
