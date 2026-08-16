@@ -681,6 +681,12 @@ pub struct ExitStatusInfo {
     pub vtxo_count: u32,
     pub claimed_count: u32,
     pub total_sat: u64,
+    /// How much has actually landed on-chain, summed over the claimed VTXOs.
+    ///
+    /// Separate from `claimed_count` because a count answers a different question: three of four
+    /// claimed says nothing about whether the fourth holds most of the money. A holder watching a
+    /// multi-hour exit is owed the amount, not just the tally.
+    pub claimed_sat: u64,
     pub errors: Vec<String>,
     /// The category speaking for the wallet this pass, or `None` when nothing went wrong.
     pub stall_category: Option<ExitStallCategory>,
@@ -705,6 +711,12 @@ impl ExitStatusInfo {
             vtxo_count: vtxos.len() as u32,
             claimed_count: stages.iter().filter(|s| **s == ExitStage::Claimed).count() as u32,
             total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
+            claimed_sat: vtxos
+                .iter()
+                .zip(&stages)
+                .filter(|(_, stage)| **stage == ExitStage::Claimed)
+                .map(|(v, _)| v.amount().to_sat())
+                .sum(),
             errors,
             stall_category: ExitStallCategory::aggregate(categories),
             claimable_at_height,

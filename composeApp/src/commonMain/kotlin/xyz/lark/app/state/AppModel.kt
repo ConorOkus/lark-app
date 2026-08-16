@@ -234,9 +234,19 @@ data class ExitEstimatesModel(
  * and the wallet keeps trying, which is the truth; a control here would imply otherwise.
  */
 data class ExitingModel(
+    /**
+     * The largest thing on the surface: a countdown where one is derivable, the state's own name
+     * everywhere else.
+     *
+     * Only the wait between the exit confirming and its funds becoming claimable can be computed,
+     * because only that one is bounded by a known height. Before it, the remaining time depends on
+     * how long confirmation takes; after it, on how long claiming takes. Neither is knowable, so
+     * neither gets a number — the alternative is a countdown that is simply wrong for hours.
+     */
     val headline: String,
     val detail: String,
     val inFlight: String,
+    val landed: String,
     val claimedOf: String,
     val stalled: Boolean,
 )

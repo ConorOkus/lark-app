@@ -216,6 +216,8 @@ data class FfiExitStatus(
     val vtxoCount: Int,
     val claimedCount: Int,
     val totalSat: Long,
+    /** Summed over the claimed VTXOs — how much has actually landed, not just how many have. */
+    val claimedSat: Long = 0L,
     val errors: List<String>,
     val stallCategory: FfiExitStallCategory? = null,
     /** Height at which every exiting VTXO becomes claimable; null until the exit knows. */

@@ -2552,6 +2552,14 @@ data class ExitStatusInfo (
     var `vtxoCount`: kotlin.UInt, 
     var `claimedCount`: kotlin.UInt, 
     var `totalSat`: kotlin.ULong, 
+    /**
+     * How much has actually landed on-chain, summed over the claimed VTXOs.
+     *
+     * Separate from `claimed_count` because a count answers a different question: three of four
+     * claimed says nothing about whether the fourth holds most of the money. A holder watching a
+     * multi-hour exit is owed the amount, not just the tally.
+     */
+    var `claimedSat`: kotlin.ULong, 
     var `errors`: List<kotlin.String>, 
     /**
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
@@ -2580,6 +2588,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalTypeExitStallCategory.read(buf),
             FfiConverterOptionalUInt.read(buf),
@@ -2591,6 +2600,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.allocationSize(value.`vtxoCount`) +
             FfiConverterUInt.allocationSize(value.`claimedCount`) +
             FfiConverterULong.allocationSize(value.`totalSat`) +
+            FfiConverterULong.allocationSize(value.`claimedSat`) +
             FfiConverterSequenceString.allocationSize(value.`errors`) +
             FfiConverterOptionalTypeExitStallCategory.allocationSize(value.`stallCategory`) +
             FfiConverterOptionalUInt.allocationSize(value.`claimableAtHeight`)
@@ -2601,6 +2611,7 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.write(value.`vtxoCount`, buf)
             FfiConverterUInt.write(value.`claimedCount`, buf)
             FfiConverterULong.write(value.`totalSat`, buf)
+            FfiConverterULong.write(value.`claimedSat`, buf)
             FfiConverterSequenceString.write(value.`errors`, buf)
             FfiConverterOptionalTypeExitStallCategory.write(value.`stallCategory`, buf)
             FfiConverterOptionalUInt.write(value.`claimableAtHeight`, buf)

@@ -65,24 +65,32 @@ fun HomeScreen(
 ) {
     Column(modifier = modifier.fillMaxSize().padding(top = HomeTopPadding)) {
         HomeTopRow(health = model.health, onOpenHealth = { machine.push(Route.HEALTH) })
-        BalanceBlock(
-            balance = model.balance,
-            onToggleUnit = machine::toggleUnit,
-            onToggleBalance = machine::toggleBalance,
-            modifier = Modifier.weight(1f),
-        )
-        val banner = model.health.banner
-        if (banner != null) {
-            AttentionBanner(
-                banner = banner,
-                offline = model.health.offline,
-                onClick = { machine.push(Route.HEALTH) },
+        val exiting = model.exiting
+        if (exiting != null) {
+            // A wallet that is leaving has no spendable balance and no available actions, so the
+            // exit takes the whole middle rather than being announced above a balance that cannot
+            // be spent and tiles that cannot be pressed.
+            ExitingSurface(exiting = exiting, modifier = Modifier.weight(1f))
+        } else {
+            BalanceBlock(
+                balance = model.balance,
+                onToggleUnit = machine::toggleUnit,
+                onToggleBalance = machine::toggleBalance,
+                modifier = Modifier.weight(1f),
+            )
+            val banner = model.health.banner
+            if (banner != null) {
+                AttentionBanner(
+                    banner = banner,
+                    offline = model.health.offline,
+                    onClick = { machine.push(Route.HEALTH) },
+                )
+            }
+            ActionTiles(
+                onPay = { machine.push(Route.SEND_INPUT) },
+                onGetPaid = { machine.go(Route.RECEIVE) },
             )
         }
-        ActionTiles(
-            onPay = { machine.push(Route.SEND_INPUT) },
-            onGetPaid = { machine.go(Route.RECEIVE) },
-        )
         LarkTabBar(current = Route.HOME, machine = machine)
     }
 }

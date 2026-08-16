@@ -79,6 +79,7 @@ class FakeWalletExit(
             vtxoCount = vtxoCount,
             claimedCount = claimed,
             inFlightSats = if (stage == ExitStage.CLAIMED) 0 else inFlightSats,
+            landedSats = if (stage == ExitStage.CLAIMED) inFlightSats else 0,
             claimableAtHeight = heights.claimableAtHeight,
         )
     }

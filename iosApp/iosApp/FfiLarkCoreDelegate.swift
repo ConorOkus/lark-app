@@ -251,6 +251,7 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
             vtxoCount: Int32(status.vtxoCount),
             claimedCount: Int32(status.claimedCount),
             totalSat: Int64(status.totalSat),
+            claimedSat: Int64(status.claimedSat),
             errors: status.errors,
             stallCategory: category,
             claimableAtHeight: status.claimableAtHeight.map { KotlinLong(value: Int64($0)) }

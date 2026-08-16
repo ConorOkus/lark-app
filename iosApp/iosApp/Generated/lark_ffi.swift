@@ -1400,6 +1400,14 @@ public struct ExitStatusInfo {
     public var vtxoCount: UInt32
     public var claimedCount: UInt32
     public var totalSat: UInt64
+    /**
+     * How much has actually landed on-chain, summed over the claimed VTXOs.
+     *
+     * Separate from `claimed_count` because a count answers a different question: three of four
+     * claimed says nothing about whether the fourth holds most of the money. A holder watching a
+     * multi-hour exit is owed the amount, not just the tally.
+     */
+    public var claimedSat: UInt64
     public var errors: [String]
     /**
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
@@ -1416,7 +1424,14 @@ public struct ExitStatusInfo {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, errors: [String], 
+    public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, 
+        /**
+         * How much has actually landed on-chain, summed over the claimed VTXOs.
+         *
+         * Separate from `claimed_count` because a count answers a different question: three of four
+         * claimed says nothing about whether the fourth holds most of the money. A holder watching a
+         * multi-hour exit is owed the amount, not just the tally.
+         */claimedSat: UInt64, errors: [String], 
         /**
          * The category speaking for the wallet this pass, or `None` when nothing went wrong.
          */stallCategory: ExitStallCategory?, 
@@ -1431,6 +1446,7 @@ public struct ExitStatusInfo {
         self.vtxoCount = vtxoCount
         self.claimedCount = claimedCount
         self.totalSat = totalSat
+        self.claimedSat = claimedSat
         self.errors = errors
         self.stallCategory = stallCategory
         self.claimableAtHeight = claimableAtHeight
@@ -1453,6 +1469,9 @@ extension ExitStatusInfo: Equatable, Hashable {
         if lhs.totalSat != rhs.totalSat {
             return false
         }
+        if lhs.claimedSat != rhs.claimedSat {
+            return false
+        }
         if lhs.errors != rhs.errors {
             return false
         }
@@ -1470,6 +1489,7 @@ extension ExitStatusInfo: Equatable, Hashable {
         hasher.combine(vtxoCount)
         hasher.combine(claimedCount)
         hasher.combine(totalSat)
+        hasher.combine(claimedSat)
         hasher.combine(errors)
         hasher.combine(stallCategory)
         hasher.combine(claimableAtHeight)
@@ -1488,6 +1508,7 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
                 vtxoCount: FfiConverterUInt32.read(from: &buf), 
                 claimedCount: FfiConverterUInt32.read(from: &buf), 
                 totalSat: FfiConverterUInt64.read(from: &buf), 
+                claimedSat: FfiConverterUInt64.read(from: &buf), 
                 errors: FfiConverterSequenceString.read(from: &buf), 
                 stallCategory: FfiConverterOptionTypeExitStallCategory.read(from: &buf), 
                 claimableAtHeight: FfiConverterOptionUInt32.read(from: &buf)
@@ -1499,6 +1520,7 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.vtxoCount, into: &buf)
         FfiConverterUInt32.write(value.claimedCount, into: &buf)
         FfiConverterUInt64.write(value.totalSat, into: &buf)
+        FfiConverterUInt64.write(value.claimedSat, into: &buf)
         FfiConverterSequenceString.write(value.errors, into: &buf)
         FfiConverterOptionTypeExitStallCategory.write(value.stallCategory, into: &buf)
         FfiConverterOptionUInt32.write(value.claimableAtHeight, into: &buf)

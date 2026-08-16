@@ -857,7 +857,7 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             networkLabel = core.networkLabel,
             restore = RestoreModel(busy = s.restoring, failed = s.restoreFailed),
             deposit = renderDeposit(s),
-            exiting = renderExiting(s),
+            exiting = renderExiting(s, advanced.network.chainTip),
         )
     }
 
@@ -867,16 +867,56 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
      * Never masked by the hidden-balance setting, following the exit screen's precedent: a screen
      * whose whole job is to say what is moving on-chain cannot hide the figure.
      */
-    private fun renderExiting(s: MachineState): ExitingModel? {
+    private fun renderExiting(s: MachineState, tipHeight: Long?): ExitingModel? {
         val status = s.exit
         if (!status.isExiting) return null
         return ExitingModel(
-            headline = "Exiting.",
+            headline = exitHeadline(status, tipHeight),
             detail = exitDetail(status),
             inFlight = primary(status.inFlightSats, s.denomination),
+            landed = primary(status.landedSats, s.denomination),
             claimedOf = "${status.claimedCount} of ${status.vtxoCount} claimed",
             stalled = status.stalled,
         )
+    }
+
+    /**
+     * The headline: a wait where one can be computed, the state's own name where it cannot.
+     *
+     * Only `WAITING_OUT_DELAY` has a knowable end — the exit's claimable height, persisted with
+     * the exit, so this keeps working with no Ark server and no chain source. Every other stage's
+     * remaining time depends on how long a confirmation takes, which nothing here can know, and a
+     * countdown invented for those would be wrong for hours at a stretch on a screen the holder
+     * checks precisely because they cannot do anything else.
+     *
+     * A missing tip is treated the same as a missing height: no tip, no countdown, no guess.
+     */
+    private fun exitHeadline(status: ExitStatus, tipHeight: Long?): String {
+        val blocksLeft = status.claimableAtHeight
+            ?.takeIf { status.stage == ExitStage.WAITING_OUT_DELAY }
+            ?.let { claimableAt -> tipHeight?.takeIf { it > 0 }?.let { claimableAt - it } }
+        return when {
+            blocksLeft != null -> approxDurationLabel(blocksLeft, MUTINYNET_BLOCK_SECONDS)
+            else -> exitStageName(status.stage)
+        }
+    }
+
+    /**
+     * A stage in the holder's words, for the headline slot.
+     *
+     * Deliberately not the protocol's vocabulary: the surface is the one thing standing between a
+     * holder and three hours of silence, and "AwaitingDelta" explains nothing to the person
+     * waiting it out.
+     */
+    private fun exitStageName(stage: ExitStage): String = when (stage) {
+        ExitStage.STARTING -> "Getting ready"
+        ExitStage.BROADCASTING -> "Confirming your exit"
+        ExitStage.WAITING_OUT_DELAY -> "Waiting out the delay"
+        ExitStage.CLAIMABLE, ExitStage.CLAIMING -> "Claiming your funds"
+        ExitStage.CLAIMED -> "Done"
+        // A parked channel exit: honest about being stuck rather than dressed as progress.
+        ExitStage.UNSUPPORTED -> "Can't continue this exit"
+        ExitStage.NONE -> "Leaving the Ark"
     }
 
     /**

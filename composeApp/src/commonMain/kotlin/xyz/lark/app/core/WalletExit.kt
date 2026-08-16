@@ -138,6 +138,15 @@ data class ExitStatus(
     val vtxoCount: Int = 0,
     val claimedCount: Int = 0,
     val inFlightSats: Long = 0,
+    /**
+     * How much has landed on-chain so far, summed over the claimed VTXOs.
+     *
+     * Paired with [inFlightSats] rather than derived from it: together they say where the money
+     * is, which is the question a holder watching a multi-hour exit actually has. A count of
+     * claimed VTXOs cannot answer it — three of four claimed says nothing about whether the
+     * fourth holds most of the value.
+     */
+    val landedSats: Long = 0,
     val stalled: Boolean = false,
     val reason: ExitStallReason? = null,
     /**
