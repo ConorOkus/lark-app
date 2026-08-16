@@ -46,6 +46,19 @@ internal fun approxDurationLabel(blocks: Long?, secondsPerBlock: Int): String = 
     else -> "about " + spelled(blocks * secondsPerBlock)
 }
 
+/**
+ * How long something has been going on: `4 minutes`, `3 hours`, `2 days`.
+ *
+ * The counterpart to [approxDurationLabel] and deliberately unhedged — no "about". An elapsed time
+ * is measured rather than predicted, so it can be stated flatly. Used where a prediction would be
+ * a lie: a stalled exit has no knowable end, and the honest number is how long it has been stuck.
+ */
+internal fun elapsedLabel(millis: Long): String =
+    if (millis < SECONDS_PER_MINUTE * MILLIS_PER_SECOND) "less than a minute"
+    else spelled(millis / MILLIS_PER_SECOND)
+
+private const val MILLIS_PER_SECOND = 1_000L
+
 /** The unit choice, split out so the label above stays a single expression. */
 private fun spelled(seconds: Long): String = when {
     seconds < SECONDS_PER_HOUR -> counted(maxOf(1L, seconds / SECONDS_PER_MINUTE), "minute")

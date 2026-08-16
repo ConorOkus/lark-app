@@ -70,7 +70,13 @@ fun HomeScreen(
             // A wallet that is leaving has no spendable balance and no available actions, so the
             // exit takes the whole middle rather than being announced above a balance that cannot
             // be spent and tiles that cannot be pressed.
-            ExitingSurface(exiting = exiting, modifier = Modifier.weight(1f))
+            ExitingSurface(
+                exiting = exiting,
+                // The deposit screen, which refuses to arm funding while exiting — so the
+                // funds land on-chain to pay exit fees and are never boarded back in.
+                onStallAction = machine::goDeposit,
+                modifier = Modifier.weight(1f),
+            )
         } else {
             BalanceBlock(
                 balance = model.balance,

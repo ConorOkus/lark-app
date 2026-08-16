@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStallReason
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.FakeWalletExit
 import xyz.lark.app.core.OnchainFunding
@@ -168,6 +169,80 @@ class ExitingModeTest {
         assertEquals(0, funding.boardCalls, "nothing may be boarded during an exit")
     }
 
+    /**
+     * The one stall that comes with something to do. Covers AE9a.
+     *
+     * The exit cannot even leave its first state without on-chain funds to pay its fees, so this
+     * is the stall a fully-boarded wallet meets first — and the only one where telling the holder
+     * to wait would be false.
+     */
+    @Test
+    fun a_funding_shortfall_offers_the_deposit_route() = runTest {
+        val exit = FakeWalletExit(
+            failure = FakeWalletExit.FakeExitFailure(
+                passes = EXIT_STALL_THRESHOLD,
+                reason = ExitStallReason.NEEDS_ONCHAIN_FUNDS,
+            ),
+        )
+        val m = machine(exit)
+        m.startExit()
+        advanceTimeBy(passes(EXIT_STALL_THRESHOLD))
+        runCurrent()
+
+        val exiting = assertNotNull(m.model.value.exiting)
+        assertEquals("Needs on-chain funds", exiting.headline)
+        assertEquals("Add on-chain funds", exiting.stallAction)
+    }
+
+    /**
+     * Taking the deposit route does not end the exit, and does not arm funding. Covers AE9a.
+     *
+     * Both halves matter. Leaving exiting mode would be the cancel this plan refuses to build, and
+     * arming funding would board the deposit — spending on the Ark the very sats that were meant
+     * to pay the exit's fees, which would deepen the stall rather than clear it.
+     */
+    @Test
+    fun clearing_a_stall_by_depositing_neither_ends_the_exit_nor_boards() = runTest {
+        val exit = FakeWalletExit(
+            failure = FakeWalletExit.FakeExitFailure(
+                passes = EXIT_STALL_THRESHOLD,
+                reason = ExitStallReason.NEEDS_ONCHAIN_FUNDS,
+            ),
+        )
+        val funding = SpyFunding()
+        val m = machine(exit, funding)
+        m.startExit()
+        advanceTimeBy(passes(EXIT_STALL_THRESHOLD))
+        runCurrent()
+
+        m.goDeposit()
+        runCurrent()
+
+        assertNotNull(m.model.value.exiting, "depositing to unstick an exit is not a cancel")
+        assertEquals(0, funding.armCalls, "the deposit must pay fees, not be boarded back in")
+        assertEquals(0, funding.boardCalls)
+    }
+
+    /** Every other category is wait-and-retry, and says so by offering nothing. Covers AE9b. */
+    @Test
+    fun other_stalls_offer_no_action_at_all() = runTest {
+        val everythingElse = ExitStallReason.entries.filterNot { it.isClearableByDeposit }
+        everythingElse.forEach { reason ->
+            val m = machine(
+                FakeWalletExit(
+                    failure = FakeWalletExit.FakeExitFailure(
+                        passes = EXIT_STALL_THRESHOLD,
+                        reason = reason,
+                    ),
+                ),
+            )
+            m.startExit()
+            advanceTimeBy(passes(EXIT_STALL_THRESHOLD))
+            runCurrent()
+            assertNull(assertNotNull(m.model.value.exiting).stallAction, "$reason offered an action")
+        }
+    }
+
     @Test
     fun boarding_becomes_available_again_once_the_exit_is_done() = runTest {
         val exit = FakeWalletExit()
@@ -210,7 +285,13 @@ class ExitingModeTest {
 
         val exiting = assertNotNull(m.model.value.exiting)
         assertTrue(exiting.stalled)
-        assertTrue(exiting.detail.contains("keeps trying"), "got: ${exiting.detail}")
+        // The stall names its cause rather than the stage it is stuck at, and says how long. The
+        // wording is per-category now (R20a), so this asserts the reporting, not one phrasing.
+        assertEquals("Can't reach the network", exiting.headline)
+        assertTrue(exiting.detail.contains("Stuck for"), "got: ${exiting.detail}")
+        assertTrue(exiting.detail.contains("funds are safe"), "got: ${exiting.detail}")
+        // Nothing to press: this category is not one the holder can clear.
+        assertNull(exiting.stallAction)
 
         val passesAtStall = exit.passes
         advanceTimeBy(passes(2))

@@ -153,6 +153,15 @@ private data class MachineState(
      */
     val exitDeltaBlocks: Int? = null,
     /**
+     * When the current stall began, or null while the exit is advancing.
+     *
+     * Kept as the moment it started rather than a running duration so the surface can say how long
+     * this has been going without the machine re-deriving it every tick. Cleared the instant a
+     * pass succeeds, because a stall that resolves and returns is a new stall — carrying the old
+     * start time forward would report a wait that never happened.
+     */
+    val exitStalledSince: Long? = null,
+    /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
      * A count rather than a flag because one failure is noise and three is a problem, and only a
@@ -163,7 +172,20 @@ private data class MachineState(
     val restoring: Boolean = false,
     /** The last words-restore did not open a wallet. Cleared when another attempt starts. */
     val restoreFailed: Boolean = false,
-)
+) {
+    /**
+     * Record an exit pass, starting or clearing the stall clock as the status dictates.
+     *
+     * The clock starts on the first stalled pass and is left alone on subsequent ones, so the
+     * surface reports how long this stall has lasted rather than how long ago the last pass was.
+     * Any unstalled pass clears it outright — including one that later stalls again, which is a
+     * new stall and deserves its own clock.
+     */
+    fun withExit(status: ExitStatus, nowMillis: Long): MachineState = copy(
+        exit = status,
+        exitStalledSince = if (status.stalled) exitStalledSince ?: nowMillis else null,
+    )
+}
 
 /**
  * The app-wide state machine (KTD-2, Bitkey-style: plain class + coroutines, no androidx
@@ -376,10 +398,10 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
      * because there is no honest way to leave a state whose transactions cannot be recalled.
      */
     private suspend fun driveExit(exit: WalletExit) {
-        update { it.copy(exit = exit.exitStatus) }
+        update { it.withExit(exit.exitStatus, wallClockMillis()) }
         while (exit.exitStatus.isExiting) {
             val status = exit.progressExit()
-            update { it.copy(exit = status) }
+            update { it.withExit(status, wallClockMillis()) }
             if (!status.isExiting) break
             delay(EXIT_POLL_MILLIS)
         }
@@ -872,71 +894,16 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
         if (!status.isExiting) return null
         return ExitingModel(
             headline = exitHeadline(status, tipHeight),
-            detail = exitDetail(status),
+            detail = exitDetail(status, s.exitStalledSince, wallClockMillis()),
             inFlight = primary(status.inFlightSats, s.denomination),
             landed = primary(status.landedSats, s.denomination),
             claimedOf = "${status.claimedCount} of ${status.vtxoCount} claimed",
             stalled = status.stalled,
+            // Read from the seam rather than decided here, so the UI cannot drift from the
+            // classification about which stalls a holder can actually clear.
+            stallAction = "Add on-chain funds"
+                .takeIf { status.stalled && status.reason?.isClearableByDeposit == true },
         )
-    }
-
-    /**
-     * The headline: a wait where one can be computed, the state's own name where it cannot.
-     *
-     * Only `WAITING_OUT_DELAY` has a knowable end — the exit's claimable height, persisted with
-     * the exit, so this keeps working with no Ark server and no chain source. Every other stage's
-     * remaining time depends on how long a confirmation takes, which nothing here can know, and a
-     * countdown invented for those would be wrong for hours at a stretch on a screen the holder
-     * checks precisely because they cannot do anything else.
-     *
-     * A missing tip is treated the same as a missing height: no tip, no countdown, no guess.
-     */
-    private fun exitHeadline(status: ExitStatus, tipHeight: Long?): String {
-        val blocksLeft = status.claimableAtHeight
-            ?.takeIf { status.stage == ExitStage.WAITING_OUT_DELAY }
-            ?.let { claimableAt -> tipHeight?.takeIf { it > 0 }?.let { claimableAt - it } }
-        return when {
-            blocksLeft != null -> approxDurationLabel(blocksLeft, MUTINYNET_BLOCK_SECONDS)
-            else -> exitStageName(status.stage)
-        }
-    }
-
-    /**
-     * A stage in the holder's words, for the headline slot.
-     *
-     * Deliberately not the protocol's vocabulary: the surface is the one thing standing between a
-     * holder and three hours of silence, and "AwaitingDelta" explains nothing to the person
-     * waiting it out.
-     */
-    private fun exitStageName(stage: ExitStage): String = when (stage) {
-        ExitStage.STARTING -> "Getting ready"
-        ExitStage.BROADCASTING -> "Confirming your exit"
-        ExitStage.WAITING_OUT_DELAY -> "Waiting out the delay"
-        ExitStage.CLAIMABLE, ExitStage.CLAIMING -> "Claiming your funds"
-        ExitStage.CLAIMED -> "Done"
-        // A parked channel exit: honest about being stuck rather than dressed as progress.
-        ExitStage.UNSUPPORTED -> "Can't continue this exit"
-        ExitStage.NONE -> "Leaving the Ark"
-    }
-
-    /**
-     * What the exit is doing, in the user's terms.
-     *
-     * A stall outranks the stage: "not advancing" is the fact that matters, and showing the stage
-     * it is stuck at as though it were progress would be the misreport the stall signal exists to
-     * prevent.
-     */
-    private fun exitDetail(status: ExitStatus): String = when {
-        status.stalled -> "Not advancing. LARK keeps trying."
-        else -> when (status.stage) {
-            ExitStage.STARTING -> "Preparing to leave the Ark."
-            ExitStage.BROADCASTING -> "Putting your exit on the chain."
-            ExitStage.WAITING_OUT_DELAY -> "Waiting out the exit delay."
-            ExitStage.CLAIMABLE -> "Ready to claim."
-            ExitStage.CLAIMING -> "Claiming your funds."
-            ExitStage.UNSUPPORTED -> "This exit needs a newer version of LARK."
-            ExitStage.NONE, ExitStage.CLAIMED -> ""
-        }
     }
 
     /**

@@ -249,6 +249,16 @@ data class ExitingModel(
     val landed: String,
     val claimedOf: String,
     val stalled: Boolean,
+    /**
+     * The label for the one action a stalled exit can offer, or null when there is nothing to
+     * offer — which is every other stall and every advancing exit.
+     *
+     * Null is the default and the honest one. A stall the holder cannot clear must not come with a
+     * button, because a control that cannot work is worse than none: it converts "wait" into
+     * "you did something wrong". Only a funding shortfall gets one, and taking it does not leave
+     * exiting mode — there is still no cancel.
+     */
+    val stallAction: String? = null,
 )
 
 /**
