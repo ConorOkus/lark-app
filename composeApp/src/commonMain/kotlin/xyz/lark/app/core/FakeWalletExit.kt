@@ -25,6 +25,16 @@ class FakeWalletExit(
     startedAlready: Boolean = false,
 ) : WalletExit {
 
+    /**
+     * How many reads answer "cannot tell" before the wallet can speak.
+     *
+     * Models the real core's asynchronous open, which is the gap every resume lands in. A knob
+     * rather than a constructor parameter only because the constructor is already at its limit;
+     * it is the single most important thing this fake can express, because a caller that reads an
+     * unreadable status as "nothing is exiting" abandons a live exit and no other setup catches it.
+     */
+    var unreadableReads: Int = 0
+
     private var failingPasses = failure.passes
 
     private var index = if (startedAlready) 0 else NOT_STARTED
@@ -34,7 +44,19 @@ class FakeWalletExit(
     var passes: Int = 0
         private set
 
-    override var exitStatus: ExitStatus = if (startedAlready) statusAt(0) else ExitStatus.NOT_EXITING
+    /**
+     * Cold until something asks, exactly like the real core.
+     *
+     * `DelegateBackedLarkCore` seeds this field with [ExitStatus.NOT_EXITING] and only fills it in
+     * once an asynchronous read returns, because reading the crate is a suspending call and this
+     * is a plain property. So a wallet reopened mid-exit reports "not exiting" until the first
+     * pass lands, and anything that decides from this field at construction time decides wrong.
+     *
+     * The fake used to be eager here, which is why its resume test passed against a core that
+     * could not resume. Being cold is the whole point: a fake that is easier to satisfy than the
+     * thing it stands in for turns a green suite into evidence of nothing.
+     */
+    override var exitStatus: ExitStatus = ExitStatus.NOT_EXITING
         private set
 
     override suspend fun startExit() {
@@ -43,6 +65,20 @@ class FakeWalletExit(
         if (index != NOT_STARTED) return
         index = 0
         exitStatus = statusAt(0)
+    }
+
+    /**
+     * Always readable: the fake has no async open to wait on. It still warms [exitStatus] here,
+     * because that is what the real implementation does and a fake that stays colder than the
+     * thing it stands in for is as misleading as one that starts warmer.
+     */
+    override suspend fun readExitStatus(): ExitStatus? {
+        if (unreadableReads > 0) {
+            unreadableReads--
+            return null
+        }
+        exitStatus = if (index == NOT_STARTED) ExitStatus.NOT_EXITING else statusAt(index)
+        return exitStatus
     }
 
     override suspend fun progressExit(): ExitStatus {

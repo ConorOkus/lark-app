@@ -48,6 +48,27 @@ internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? 
 }
 
 /**
+ * The status to report when a progress pass could not be read at all.
+ *
+ * Keeps the last known stage and amounts — nothing about the exit changed, only our ability to ask
+ * — but lets the app's stall policy apply. Without this a pass that fails outright is dropped and
+ * the previous status stands, so a wallet whose every pass fails counts failures forever and never
+ * says so: the exit sits on a stage name with no explanation and no way for the holder to learn
+ * there is one.
+ *
+ * The reason is [ExitStallReason.UNKNOWN] because that is what is known. A failed call carries no
+ * category from the engine, and picking a plausible-sounding one — an unreachable chain, say —
+ * would be inventing a cause from an absence of information.
+ */
+internal fun ExitStatus.afterUnreadablePass(consecutiveFailures: Int): ExitStatus {
+    val stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD
+    return copy(
+        stalled = stalled,
+        reason = if (stalled) reason ?: ExitStallReason.UNKNOWN else reason,
+    )
+}
+
+/**
  * The crate's stall categories in the app's vocabulary.
  *
  * A missing category maps to [ExitStallReason.UNKNOWN] rather than to null: the caller only asks

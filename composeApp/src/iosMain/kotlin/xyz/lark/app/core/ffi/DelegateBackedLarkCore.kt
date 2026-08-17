@@ -229,7 +229,11 @@ class DelegateBackedLarkCore(
             reported.errors.isEmpty() -> 0
             else -> consecutiveExitFailures + 1
         }
-        exitStatus = reported.toExitStatus(consecutiveExitFailures) ?: exitStatus
+        // A pass that could not be read still counts, and still has to be sayable. Falling back to
+        // the previous status unchanged would drop the stall along with the failure that caused
+        // it, leaving the surface on a stage name forever.
+        exitStatus = reported.toExitStatus(consecutiveExitFailures)
+            ?: exitStatus.afterUnreadablePass(consecutiveExitFailures)
         recordCompletionIfFinished()
         return exitStatus
     }
@@ -285,6 +289,16 @@ class DelegateBackedLarkCore(
      */
     override suspend fun exitDeltaBlocks(): Int? =
         delegate.awaitValue<Long> { onResult -> exitDeltaBlocks(onResult) }?.toInt()
+
+    /**
+     * Null while the wallet is still opening, which is the case that matters: the machine resumes
+     * at construction and the open is a second of async work behind it. Reporting NOT_EXITING here
+     * would tell the caller there is nothing to resume, for every exit, on every launch.
+     */
+    override suspend fun readExitStatus(): ExitStatus? =
+        delegate.awaitValue<FfiExitStatus> { onResult -> exitStatus(onResult) }
+            ?.toExitStatus(consecutiveExitFailures)
+            ?.also { exitStatus = it }
 
     /** Re-read the exit without advancing it, for the status the machine resumes from. */
     private suspend fun refreshExitStatus() {

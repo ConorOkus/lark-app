@@ -2,6 +2,7 @@ package xyz.lark.app.state
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.ExitStage
@@ -38,6 +39,10 @@ private fun TestScope.exitingAt(
             startedAlready = true,
         ),
     )
+    // One pass, because the capability reports NOT_EXITING until something asks — the same
+    // coldness the real core has, and the reason the resume path had to stop reading it directly.
+    runCurrent()
+    advanceTimeBy(1)
     runCurrent()
     return assertNotNull(m.model.value.exiting, "the wallet should be exiting at $stage")
 }

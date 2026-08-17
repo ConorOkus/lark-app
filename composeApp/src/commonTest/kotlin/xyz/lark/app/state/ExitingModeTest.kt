@@ -124,6 +124,15 @@ class ExitingModeTest {
         assertNull(m.model.value.exiting, "a claimed exit leaves the mode")
     }
 
+    /**
+     * Found in the field: this passed against a core that could not resume at all.
+     *
+     * The machine decided from the capability's status property at construction, and that property
+     * is cold until a suspending read fills it — so a reopened exit reported "not exiting", no
+     * watcher started, the exiting surface never appeared, and send and receive were offered on a
+     * wallet mid-exit. The fake was eager where the real core is lazy, so the test agreed with the
+     * bug. [FakeWalletExit] is cold now, which is what makes this test mean something.
+     */
     @Test
     fun an_exit_already_in_flight_resumes_at_launch_with_no_user_action() = runTest {
         // The app does not run while it is closed, so a wallet reopened mid-exit is carrying a
@@ -137,6 +146,24 @@ class ExitingModeTest {
         advanceTimeBy(passes(2))
         runCurrent()
         assertTrue(exit.passes >= 2, "resumed watcher made ${exit.passes} passes")
+    }
+
+    /**
+     * The guards have to come back with the exit. Covers R7 on the resume path specifically: a
+     * reopened exit that never re-entered the mode would offer sends out of a wallet with no
+     * spendable VTXOs left.
+     */
+    @Test
+    fun a_resumed_exit_restores_the_guards_it_was_holding() = runTest {
+        val funding = SpyFunding(armedAt = 1L)
+        val m = machine(FakeWalletExit(startedAlready = true), funding)
+        runCurrent()
+        advanceTimeBy(1)
+        runCurrent()
+
+        assertNotNull(m.model.value.exiting, "a reopened exit is still an exit")
+        assertEquals(1, funding.disarmCalls, "the funding intent stands down again on resume")
+        assertNull(funding.fundingArmedAtMillis)
     }
 
     // --- Guards ---

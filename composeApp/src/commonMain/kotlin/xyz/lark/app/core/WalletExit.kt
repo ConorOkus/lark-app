@@ -54,6 +54,19 @@ interface WalletExit {
      * reading an exit screen. Callers show an unknown; substituting a default would put a wrong
      * wait under a button that cannot be taken back.
      */
+    /**
+     * Where the exit stands, or null when that could not be determined *right now*.
+     *
+     * Null is not "no exit" — it is "ask again". The distinction is the whole reason this exists:
+     * an implementation backed by a wallet that opens asynchronously cannot answer until it has,
+     * and a caller that reads the difference as "nothing is exiting" abandons a real exit forever.
+     * That is not hypothetical; it is the defect this member was added to close.
+     *
+     * [exitStatus] is the last answer received and is deliberately not a substitute: it reports
+     * NOT_EXITING before the first read lands, which is exactly the ambiguity this resolves.
+     */
+    suspend fun readExitStatus(): ExitStatus?
+
     suspend fun exitDeltaBlocks(): Int?
 
     /**

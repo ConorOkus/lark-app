@@ -81,6 +81,16 @@ private const val FUNDING_POLL_IDLE_MILLIS = 120_000L
 private const val EXIT_POLL_MILLIS = 30_000L
 
 /**
+ * How long to wait before asking again when the exit's state cannot be read yet.
+ *
+ * Short, because this only bridges the wallet's asynchronous open — about a second — and every
+ * tick of it is a tick where a reopened exit has not yet re-entered the mode that forbids
+ * spending. Much shorter than the progress cadence, which is gated by blocks rather than by
+ * whether the app is ready to ask.
+ */
+private const val EXIT_RESUME_RETRY_MILLIS = 500L
+
+/**
  * Consecutive failures before the user is told anything.
  *
  * A board can fail because a round was in progress or the server blinked, and both fix themselves.
@@ -403,15 +413,28 @@ class AppStateMachine constructor(
      */
     private fun resumeExitIfInFlight() {
         val exit = walletExit ?: return
-        if (!exit.exitStatus.isExiting) {
-            // Not exiting, but an exit may have finished while the app was closed — which for a
-            // process that only runs when opened is the ordinary case, not the unlucky one.
-            scope.launch { showReceiptIfPending(exit) }
-            return
-        }
-        standDownFunding()
         exitWatcherJob?.cancel()
-        exitWatcherJob = scope.launch { driveExit(exit) }
+        exitWatcherJob = scope.launch {
+            // Wait for an answer rather than assuming one. This runs at construction, before the
+            // wallet has finished opening, so the first reads come back "cannot tell" — and both
+            // of the obvious shortcuts here are wrong in the same direction. Reading the status
+            // property gives NOT_EXITING because nothing has filled it in yet; treating an
+            // unreadable read as NOT_EXITING gives up on a real exit permanently. Either way the
+            // holder reopens the app to an ordinary wallet with their money mid-exit and the
+            // guards off, which is the worst state this feature can produce.
+            var status = exit.readExitStatus()
+            while (status == null) {
+                delay(EXIT_RESUME_RETRY_MILLIS)
+                status = exit.readExitStatus()
+            }
+            update { it.withExit(status, wallClockMillis()) }
+            if (!status.isExiting) {
+                showReceiptIfPending(exit)
+                return@launch
+            }
+            standDownFunding()
+            driveExit(exit)
+        }
     }
 
     /**
@@ -451,12 +474,12 @@ class AppStateMachine constructor(
      * because there is no honest way to leave a state whose transactions cannot be recalled.
      */
     private suspend fun driveExit(exit: WalletExit) {
-        update { it.withExit(exit.exitStatus, wallClockMillis()) }
-        while (exit.exitStatus.isExiting) {
-            val status = exit.progressExit()
-            update { it.withExit(status, wallClockMillis()) }
-            if (!status.isExiting) break
+        var status = exit.progressExit()
+        update { it.withExit(status, wallClockMillis()) }
+        while (status.isExiting) {
             delay(EXIT_POLL_MILLIS)
+            status = exit.progressExit()
+            update { it.withExit(status, wallClockMillis()) }
         }
         showReceiptIfPending(exit)
     }
