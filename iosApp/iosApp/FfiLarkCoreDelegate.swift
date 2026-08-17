@@ -251,7 +251,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
             vtxoCount: Int32(status.vtxoCount),
             claimedCount: Int32(status.claimedCount),
             totalSat: Int64(status.totalSat),
-            claimedSat: Int64(status.claimedSat),
+            // Optional across the boundary: unknown stays unknown rather than becoming a zero the
+            // receipt would render as an amount.
+            landedSat: status.landedSat.map { KotlinLong(value: Int64($0)) },
+            claimFeeSat: status.claimFeeSat.map { KotlinLong(value: Int64($0)) },
             errors: status.errors,
             stallCategory: category,
             claimableAtHeight: status.claimableAtHeight.map { KotlinLong(value: Int64($0)) }
