@@ -23,7 +23,7 @@ final class KeychainSecureStore: LarkSecureStore {
     private let walletFileName = "wallet.sqlite"
     private let backedUpMarkerName = "backed-up"
     private let fundingArmedAtMarkerName = "funding-armed-at"
-    private let exitCompletedAtMarkerName = "exit-completed-at"
+    private let exitTimesMarkerName = "exit-times"
 
     /// `lark/` under Application Support, created on first use.
     var datadir: String {
@@ -107,27 +107,35 @@ final class KeychainSecureStore: LarkSecureStore {
         datadir + "/" + fundingArmedAtMarkerName
     }
 
-    /// The same marker-file shape as the funding intent, for the same reason: the value is a fact
-    /// about this device rather than about the wallet, so it belongs beside the datadir and not in
-    /// bark's database. Unparseable is treated as absent — a receipt shown twice is a smaller
-    /// failure than one suppressed because a corrupt file parsed as some epoch.
-    func loadExitCompletedAt() -> KotlinLong? {
-        guard let text = try? String(contentsOfFile: exitCompletedAtPath, encoding: .utf8),
-              let millis = Int64(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return nil }
-        return KotlinLong(longLong: millis)
+    /// Both exit timings in one marker file, matching the interface: they describe one exit and
+    /// only ever change together. Written as `start` or `start,completed` — a start with no finish
+    /// is an exit in flight, and a malformed line is treated as absent for the same reason the
+    /// other markers are, since a receipt shown twice beats one suppressed by a corrupt file.
+    func loadExitTimes() -> ExitTimes? {
+        guard let text = try? String(contentsOfFile: exitTimesPath, encoding: .utf8) else { return nil }
+        let parts = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ",")
+        guard let startedAt = parts.first.flatMap({ Int64($0) }) else { return nil }
+        let completedAt = parts.count > 1 ? Int64(parts[1]) : nil
+        return ExitTimes(
+            startedAt: startedAt,
+            completedAt: completedAt.map { KotlinLong(longLong: $0) }
+        )
     }
 
-    func storeExitCompletedAt(millis: KotlinLong?) {
-        guard let millis else {
-            try? FileManager.default.removeItem(atPath: exitCompletedAtPath)
+    func storeExitTimes(times: ExitTimes?) {
+        guard let times else {
+            try? FileManager.default.removeItem(atPath: exitTimesPath)
             return
         }
-        try? String(millis.int64Value).write(toFile: exitCompletedAtPath, atomically: true, encoding: .utf8)
+        var line = String(times.startedAt)
+        if let completedAt = times.completedAt {
+            line += ",\(completedAt.int64Value)"
+        }
+        try? line.write(toFile: exitTimesPath, atomically: true, encoding: .utf8)
     }
 
-    private var exitCompletedAtPath: String {
-        datadir + "/" + exitCompletedAtMarkerName
+    private var exitTimesPath: String {
+        datadir + "/" + exitTimesMarkerName
     }
 }
 

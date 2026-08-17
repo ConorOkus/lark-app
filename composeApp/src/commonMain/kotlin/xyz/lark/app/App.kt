@@ -39,6 +39,7 @@ import xyz.lark.app.ui.screens.pay.SentScreen
 import xyz.lark.app.ui.screens.receive.ReceiveScreen
 import xyz.lark.app.ui.screens.settings.AdvancedScreen
 import xyz.lark.app.ui.screens.settings.BackupScreen
+import xyz.lark.app.ui.screens.settings.ExitDoneScreen
 import xyz.lark.app.ui.screens.settings.ExitScreen
 import xyz.lark.app.ui.screens.settings.HealthScreen
 import xyz.lark.app.ui.screens.settings.SettingsScreen
@@ -146,6 +147,9 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             Route.HEALTH -> HealthRoute(model = model, machine = machine)
             Route.ADVANCED -> AdvancedScreen(model = model, machine = machine)
             Route.EXIT -> ExitRoute(model = model, machine = machine)
+            Route.EXIT_DONE -> model.exitDone?.let { done ->
+                ExitDoneScreen(done = done, onDone = machine::dismissExitReceipt)
+            }
         }
     }
 }

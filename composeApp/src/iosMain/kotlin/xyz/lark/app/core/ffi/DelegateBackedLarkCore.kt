@@ -16,6 +16,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.blockExpiryLabel
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
+import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
@@ -71,6 +72,12 @@ private const val MAINTENANCE_EVERY_N_CYCLES = 4
 data class FfiTuning(
     val pollInterval: Duration = DEFAULT_POLL_INTERVAL,
     val secondsPerBlock: Int = MUTINYNET_SECONDS_PER_BLOCK,
+    /**
+     * Wall clock, here rather than on the constructor for the same reason the rest of this class
+     * is: it is a knob, not a collaborator. Wall rather than monotonic because the exit timings it
+     * stamps are compared across app launches, where a monotonic reading means nothing.
+     */
+    val wallClockMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 )
 
 /** mutinynet targets 30-second blocks; see [FfiTuning.secondsPerBlock]. */
@@ -204,6 +211,10 @@ class DelegateBackedLarkCore(
 
     override suspend fun startExit() {
         delegate.awaitDone { onDone -> startExit(onDone) }
+        // Stamped before the first status read so a crash between the two still leaves a start to
+        // measure from. An exit whose duration is unknown is a smaller loss than one whose start
+        // is recorded after hours of progress.
+        if (store.loadExitTimes() == null) store.storeExitTimes(ExitTimes(startedAt = tuning.wallClockMillis()))
         refreshExitStatus()
     }
 
@@ -217,8 +228,41 @@ class DelegateBackedLarkCore(
             else -> consecutiveExitFailures + 1
         }
         exitStatus = reported.toExitStatus(consecutiveExitFailures) ?: exitStatus
+        recordCompletionIfFinished()
         return exitStatus
     }
+
+    /**
+     * Stamp the finish the first time a pass reports one.
+     *
+     * Guarded on the stamp being absent rather than on the transition, because the transition is
+     * only observable by whichever pass happens to catch it — and a relaunch mid-exit means no
+     * pass in this process ever saw the earlier stages. Presence of the stamp is the fact; when it
+     * was written is not.
+     */
+    private fun recordCompletionIfFinished() {
+        if (exitStatus.stage != ExitStage.CLAIMED) return
+        store.loadExitTimes()
+            ?.takeIf { it.completedAt == null }
+            ?.let { store.storeExitTimes(it.copy(completedAt = tuning.wallClockMillis())) }
+    }
+
+    /**
+     * Null unless an exit has finished and the holder has not dismissed its receipt.
+     *
+     * The landed figure comes from the live status rather than from storage: bark keeps claimed
+     * exit VTXOs, so the amount is still readable after any number of relaunches, and storing a
+     * second copy would only create a way for the two to disagree about money.
+     */
+    override suspend fun pendingReceipt(): ExitReceipt? =
+        store.loadExitTimes()?.takeIf { it.completedAt != null }?.let { times ->
+            ExitReceipt(
+                landedSats = exitStatus.landedSats,
+                tookMillis = (times.completedAt!! - times.startedAt).coerceAtLeast(0L),
+            )
+        }
+
+    override suspend fun acknowledgeReceipt() = store.storeExitTimes(null)
 
     /**
      * Null when the crate cannot answer, which includes both "no server to ask" and a failed call.

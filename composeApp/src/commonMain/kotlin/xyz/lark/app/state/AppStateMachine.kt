@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
@@ -20,6 +21,7 @@ import xyz.lark.app.core.format.EXPIRY_PLACEHOLDER
 import xyz.lark.app.core.format.MUTINYNET_BLOCK_SECONDS
 import xyz.lark.app.core.format.MoneyFormat
 import xyz.lark.app.core.format.approxDurationLabel
+import xyz.lark.app.core.format.elapsedLabel
 // Pure destination classification, kept beside the resolver and invoice parser it composes so the
 // input screen and the send path cannot disagree about what counts as payable.
 import xyz.lark.app.core.gateway.SendInput
@@ -161,6 +163,8 @@ private data class MachineState(
      * start time forward would report a wait that never happened.
      */
     val exitStalledSince: Long? = null,
+    /** The finished exit's figures, held from the moment it completes until the receipt is gone. */
+    val exitReceipt: ExitReceipt? = null,
     /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
@@ -381,10 +385,41 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
      */
     private fun resumeExitIfInFlight() {
         val exit = walletExit ?: return
-        if (!exit.exitStatus.isExiting) return
+        if (!exit.exitStatus.isExiting) {
+            // Not exiting, but an exit may have finished while the app was closed — which for a
+            // process that only runs when opened is the ordinary case, not the unlucky one.
+            scope.launch { showReceiptIfPending(exit) }
+            return
+        }
         standDownFunding()
         exitWatcherJob?.cancel()
         exitWatcherJob = scope.launch { driveExit(exit) }
+    }
+
+    /**
+     * Put the finished exit's receipt up, if one is owed.
+     *
+     * Routes rather than merely rendering, because the receipt has to be seen: it is the one
+     * moment the app's central claim is demonstrably true, and a holder who opened the app to an
+     * ordinary home would never learn their exit had completed except by counting sats.
+     */
+    private suspend fun showReceiptIfPending(exit: WalletExit) {
+        val receipt = exit.pendingReceipt() ?: return
+        update { it.copy(exitReceipt = receipt) }
+        go(Route.EXIT_DONE)
+    }
+
+    /**
+     * Dismiss the receipt and return to an ordinary wallet.
+     *
+     * Acknowledging first means a crash between the two shows home rather than the receipt again —
+     * the right way to fail for a screen whose contract is that it appears once.
+     */
+    fun dismissExitReceipt() {
+        val exit = walletExit
+        update { it.copy(exitReceipt = null) }
+        go(Route.HOME)
+        scope.launch { exit?.acknowledgeReceipt() }
     }
 
     /**
@@ -405,6 +440,7 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             if (!status.isExiting) break
             delay(EXIT_POLL_MILLIS)
         }
+        showReceiptIfPending(exit)
     }
 
     /**
@@ -880,6 +916,15 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             restore = RestoreModel(busy = s.restoring, failed = s.restoreFailed),
             deposit = renderDeposit(s),
             exiting = renderExiting(s, advanced.network.chainTip),
+            exitDone = s.exitReceipt?.let { receipt ->
+                ExitDoneModel(
+                    landed = primary(receipt.landedSats, s.denomination),
+                    // Not recorded by the engine — see ExitDoneModel. An em-dash rather than a
+                    // dropped row, matching the exit screen it mirrors.
+                    minerFee = EXPIRY_PLACEHOLDER,
+                    took = elapsedLabel(receipt.tookMillis),
+                )
+            },
         )
     }
 

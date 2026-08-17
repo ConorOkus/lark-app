@@ -72,7 +72,7 @@ internal fun exitStageName(stage: ExitStage): String = when (stage) {
     ExitStage.CLAIMED -> "Done"
     // A parked channel exit: honest about being stuck rather than dressed as progress.
     ExitStage.UNSUPPORTED -> "Can't continue this exit"
-    ExitStage.NONE -> "Leaving the Ark"
+    ExitStage.NONE -> "Moving on-chain"
 }
 
 /**
@@ -85,7 +85,7 @@ internal fun exitStageName(stage: ExitStage): String = when (stage) {
 internal fun exitDetail(status: ExitStatus, stalledSince: Long?, nowMillis: Long): String = when {
     status.stalled -> exitStallDetail(status.reason, stalledSince, nowMillis)
     else -> when (status.stage) {
-        ExitStage.STARTING -> "Preparing to leave the Ark."
+        ExitStage.STARTING -> "Getting your exit ready."
         ExitStage.BROADCASTING -> "Putting your exit on the chain."
         ExitStage.WAITING_OUT_DELAY -> "Waiting out the exit delay."
         ExitStage.CLAIMABLE -> "Ready to claim."

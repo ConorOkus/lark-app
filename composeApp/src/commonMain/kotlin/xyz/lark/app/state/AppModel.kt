@@ -203,6 +203,29 @@ data class AppModel(
      * are still in.
      */
     val exiting: ExitingModel?,
+    /**
+     * The finished exit's receipt, or null when there is none to show.
+     *
+     * Separate from [exiting] and never non-null at the same time: one says the wallet is leaving,
+     * the other that it has left.
+     */
+    val exitDone: ExitDoneModel?,
+)
+
+/**
+ * A finished exit, once.
+ *
+ * Deliberately reads as a result rather than a warning. The funds are on-chain under the holder's
+ * own keys at this point, so there is nothing outstanding and nothing to be careful about — the
+ * screen's job is to say the thing LARK claims actually happened, and then get out of the way.
+ *
+ * [minerFee] is an em-dash for now: the engine's claimed state records a txid and a block and no
+ * amount, so what the exit actually cost is not recoverable without reading the chain back.
+ */
+data class ExitDoneModel(
+    val landed: String,
+    val minerFee: String,
+    val took: String,
 )
 
 /**

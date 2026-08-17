@@ -99,9 +99,9 @@ private fun ExitCard(amount: String, estimates: ExitEstimatesModel) {
     }
 }
 
-/** One card line: 400 15sp label left, 600 15sp value right. */
+/** One card line: 400 15sp label left, 600 15sp value right. Shared with the receipt. */
 @Composable
-private fun ExitRow(label: String, value: String, tabular: Boolean = false) {
+internal fun ExitRow(label: String, value: String, tabular: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(CardRowPadding),
         verticalAlignment = Alignment.CenterVertically,

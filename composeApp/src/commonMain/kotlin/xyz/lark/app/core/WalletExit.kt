@@ -55,7 +55,33 @@ interface WalletExit {
      * wait under a button that cannot be taken back.
      */
     suspend fun exitDeltaBlocks(): Int?
+
+    /**
+     * A finished exit the holder has not been shown yet, or null.
+     *
+     * Non-null exactly once per exit, and it survives the app being killed. That matters more here
+     * than it looks: an exit runs for hours with nothing to watch, so the app being closed between
+     * the last claim and the holder next opening it is the likely case rather than the unlucky
+     * one — and a receipt only shown in the session that happened to be running would be missed by
+     * almost everyone.
+     */
+    suspend fun pendingReceipt(): ExitReceipt?
+
+    /** Record that the receipt has been seen. It does not come back. */
+    suspend fun acknowledgeReceipt()
 }
+
+/**
+ * What a finished exit is worth saying: how much arrived, and how long it took.
+ *
+ * No fee, because nothing records one. The engine's claimed state keeps a txid and a block height
+ * and no amount, so the fee actually paid could only be recovered by reading the claim transaction
+ * back off the chain — which this app does not do, and will not guess at.
+ */
+data class ExitReceipt(
+    val landedSats: Long,
+    val tookMillis: Long,
+)
 
 /**
  * How far a unilateral exit has got.

@@ -39,6 +39,16 @@ enum class Route(val screenLabel: String) {
     HEALTH("Wallet status"),
     ADVANCED("Advanced"),
     EXIT("Move on-chain"),
+
+    /**
+     * The one-time receipt for a finished exit.
+     *
+     * A route rather than a home variant because it is a moment, not a state: it appears once,
+     * ahead of an otherwise ordinary home, and is gone as soon as it is dismissed. The wallet
+     * behind it is already back to normal — this is the only screen in the app whose whole job is
+     * to say that something is over.
+     */
+    EXIT_DONE("Exit complete"),
     ;
 
     /**

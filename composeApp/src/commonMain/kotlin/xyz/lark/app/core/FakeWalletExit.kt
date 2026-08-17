@@ -71,6 +71,24 @@ class FakeWalletExit(
      */
     override suspend fun exitDeltaBlocks(): Int? = heights.deltaBlocks
 
+    private var receiptAcknowledged = false
+
+    /**
+     * Mirrors the real thing's rule rather than its storage: a receipt exists once the script has
+     * reached the end and until the holder dismisses it. Tests that never advance that far never
+     * see one, which is the same shape as a wallet mid-exit.
+     */
+    override suspend fun pendingReceipt(): ExitReceipt? =
+        if (exitStatus.stage == ExitStage.CLAIMED && !receiptAcknowledged) {
+            ExitReceipt(landedSats = inFlightSats, tookMillis = TOOK_MILLIS)
+        } else {
+            null
+        }
+
+    override suspend fun acknowledgeReceipt() {
+        receiptAcknowledged = true
+    }
+
     private fun statusAt(at: Int): ExitStatus {
         val stage = script[at]
         val claimed = if (stage == ExitStage.CLAIMED) vtxoCount else 0
@@ -109,8 +127,18 @@ class FakeWalletExit(
         val claimableAtHeight: Long? = null,
     )
 
+
     companion object {
         private const val NOT_STARTED = -1
+
+        /**
+         * How long a scripted exit is said to have taken.
+         *
+         * A constant rather than measured virtual time: the fake's passes advance a test scheduler,
+         * not a wall clock, and the receipt's duration is wall-clock by definition — it spans app
+         * launches. Three hours is what a real mutinynet exit roughly costs.
+         */
+        const val TOOK_MILLIS: Long = 3L * 60 * 60 * 1_000
 
         /** The ordinary path: start, broadcast, wait out the delay, become claimable, claim. */
         val DEFAULT_SCRIPT = listOf(
