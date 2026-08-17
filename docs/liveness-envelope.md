@@ -56,9 +56,14 @@ background refresh, not a bigger number.
   open an app, which is the weakest possible mechanism. `BGTaskScheduler` would shorten the exposure
   but cannot be relied on — iOS grants background time at its discretion — so a long lifetime stays
   necessary either way.
-- **Unilateral exit** (#19) is still a stub. If the server vanished, the exit path a user would need
-  is not in the app. That makes the server's continued operation part of the envelope, not a
-  fallback: this is a test network, and that trade is acceptable here and nowhere else.
+- **Unilateral exit** (#19) exists and has been run end to end, but not yet without a server.
+  Settings → Advanced starts it, the wallet drives it to `Claimed` on its own, and the proceeds land
+  in the on-chain wallet — verified on mutinynet: three exit transactions with CPFP children, then a
+  claim spending all three into a BDK address. What has *not* been proven is the case the feature
+  exists for. Every run so far had captaind reachable; the drill skips when it is not, because
+  `lark-captaind` has 3535 closed. So the server's continued operation is still part of the
+  envelope in practice — the fallback is written and tested, just never yet exercised against the
+  failure it is for.
 - **The deadline is visible but passive.** Settings → Advanced now shows the VTXO count and the
   soonest expiry as a real countdown (`block 3,377,744 · in 20 days`), computed at the network's
   actual block spacing — so a user *can* see their own deadline, but only if they go looking. The

@@ -33,6 +33,12 @@ cd iosApp && xcodegen generate && xcodebuild -scheme iosApp -configuration Debug
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
+**A green Kotlin suite does not mean the iOS app builds.** `:composeApp:testDebugUnitTest` compiles
+`commonMain` and `commonTest` only — it never touches `iosMain`, so anything Swift calls across the
+delegate seam can be broken while every test passes. `:composeApp:linkDebugFrameworkIosSimulatorArm64`
+is the cheap check (seconds, and it does compile `iosMain`); `xcodebuild` is the complete one. This
+has bitten three times in one feature.
+
 Two things that will bite a fresh checkout:
 
 - **The Rust core's XCFramework is a build artifact, not in the repo** (~216MB). The iOS app links
