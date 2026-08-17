@@ -91,6 +91,15 @@ private const val EXIT_POLL_MILLIS = 30_000L
 private const val EXIT_RESUME_RETRY_MILLIS = 500L
 
 /**
+ * The longest gap between resume attempts once backoff has run out of patience.
+ *
+ * A wallet that still cannot answer after a few seconds is not mid-open, it is broken — and the
+ * honest response is to keep asking cheaply rather than either giving up on a live exit or spinning
+ * at full rate forever. Capped low enough that a wallet which recovers is picked up promptly.
+ */
+private const val EXIT_RESUME_RETRY_CEILING_MILLIS = 15_000L
+
+/**
  * Consecutive failures before the user is told anything.
  *
  * A board can fail because a round was in progress or the server blinked, and both fix themselves.
@@ -423,8 +432,14 @@ class AppStateMachine constructor(
             // holder reopens the app to an ordinary wallet with their money mid-exit and the
             // guards off, which is the worst state this feature can produce.
             var status = exit.readExitStatus()
+            var wait = EXIT_RESUME_RETRY_MILLIS
             while (status == null) {
-                delay(EXIT_RESUME_RETRY_MILLIS)
+                delay(wait)
+                // Backs off rather than hammering. The first few retries bridge the wallet's open,
+                // which is the case this exists for; past that, something is wrong and polling
+                // twice a second for the life of the process would only hide it behind a flat
+                // battery. The ceiling keeps a recovered wallet from waiting long once it can talk.
+                wait = (wait * 2).coerceAtMost(EXIT_RESUME_RETRY_CEILING_MILLIS)
                 status = exit.readExitStatus()
             }
             update { it.withExit(status, wallClockMillis()) }
@@ -956,6 +971,16 @@ class AppStateMachine constructor(
     private fun isOverBalance(s: MachineState): Boolean =
         s.mode == KeypadMode.SEND && typedSats(s) > core.balanceSats.value
 
+    /**
+     * An amount, or an em-dash when there is no amount to state.
+     *
+     * The house rule applied to money the app cannot account for exactly. Zero and unknown are
+     * different facts — nothing has landed yet, versus this process never saw what did — and only
+     * one of them is a number.
+     */
+    private fun amountOrUnknown(sats: Long?, denomination: Denomination): String =
+        sats?.let { primary(it, denomination) } ?: EXPIRY_PLACEHOLDER
+
     private fun primary(sats: Long, denomination: Denomination): String =
         if (denomination == Denomination.FIAT) MoneyFormat.fiat(sats, core.fiatRate) else MoneyFormat.btc(sats)
 
@@ -998,10 +1023,11 @@ class AppStateMachine constructor(
             exiting = renderExiting(s, advanced.network.chainTip),
             exitDone = s.exitReceipt?.let { receipt ->
                 ExitDoneModel(
-                    landed = primary(receipt.landedSats, s.denomination),
-                    // Not recorded by the engine — see ExitDoneModel. An em-dash rather than a
-                    // dropped row, matching the exit screen it mirrors.
-                    minerFee = EXPIRY_PLACEHOLDER,
+                    // Both from the claim as it was built. Unknown only when this process did not
+                    // build it — and unknown then, rather than the claimed VTXOs' face value,
+                    // which is what the money was worth before the claim took its fee out.
+                    landed = amountOrUnknown(receipt.landedSats, s.denomination),
+                    minerFee = amountOrUnknown(receipt.feeSats, s.denomination),
                     took = elapsedLabel(receipt.tookMillis),
                 )
             },
@@ -1021,7 +1047,7 @@ class AppStateMachine constructor(
             headline = exitHeadline(status, tipHeight),
             detail = exitDetail(status, s.exitStalledSince, wallClockMillis()),
             inFlight = primary(status.inFlightSats, s.denomination),
-            landed = primary(status.landedSats, s.denomination),
+            landed = amountOrUnknown(status.landedSats, s.denomination),
             claimedOf = "${status.claimedCount} of ${status.vtxoCount} claimed",
             stalled = status.stalled,
             // Read from the seam rather than decided here, so the UI cannot drift from the

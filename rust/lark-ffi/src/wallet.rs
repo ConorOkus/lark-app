@@ -47,6 +47,34 @@ pub struct LarkWallet {
     seed64: [u8; 64],
     db_path: String,
     fingerprint: Vec<u8>,
+    /// What the claim this process built actually paid out, once it has built one.
+    ///
+    /// The only place the true figures exist. A claimed VTXO's recorded state keeps a txid and a
+    /// block and no amount, and the VTXO's own `amount()` is its face value — which is what it was
+    /// worth before the claim deducted its fee, not what arrived. Reporting the face value as the
+    /// landed amount overstates it by exactly the fee.
+    ///
+    /// In memory, so it is lost if the process restarts between claiming and showing the receipt.
+    /// That case reports unknown rather than falling back to the face value: an em-dash is the
+    /// house rule for a figure we do not have, and the face value is not that figure.
+    claim_outcome: tokio::sync::Mutex<Option<ClaimOutcome>>,
+}
+
+/// What a claim transaction moved, as built.
+#[derive(Clone, Copy)]
+struct ClaimOutcome {
+    landed_sat: u64,
+    fee_sat: u64,
+}
+
+/// A claim that did not go out, and what kind of problem it was.
+///
+/// Carries a category because the cause is known at the point of failure. Reporting a failed claim
+/// as uncategorised would surface it as "something isn't working" on the one screen the holder is
+/// watching, when the app knows perfectly well whether it was the chain, the fee, or the network.
+struct ClaimFailure {
+    message: String,
+    category: ExitStallCategory,
 }
 
 impl Drop for LarkWallet {
@@ -120,6 +148,7 @@ pub async fn open_wallet(
     let out = Arc::new(LarkWallet {
         inner: wallet,
         onchain: tokio::sync::Mutex::new(onchain),
+        claim_outcome: tokio::sync::Mutex::new(None),
         seed64,
         db_path,
         fingerprint,
@@ -397,14 +426,22 @@ impl LarkWallet {
         // spends it, so an exit that has waited out its whole delay stops one step from the end
         // and stays there. `drain_exits` is the only thing that finishes an exit, and it has to be
         // asked.
-        let claim_error = self.claim_claimable(&exit, &mut *onchain).await.err();
-        let errors = match claim_error {
-            Some(e) => errors.into_iter().chain(std::iter::once(e)).collect(),
-            None => errors,
+        // A failed claim is reported like any other failing pass, and with a category: the cause is
+        // known here, so letting it surface as "something isn't working" would throw away the one
+        // piece of information the holder could act on.
+        let (errors, categories) = match self.claim_claimable(&exit, &mut *onchain).await {
+            Ok(()) => (errors, categories),
+            Err(e) => (
+                errors.into_iter().chain(std::iter::once(e.message)).collect(),
+                categories.into_iter().chain(std::iter::once(e.category)).collect(),
+            ),
         };
 
         let claimable_at = exit.all_claimable_at_height().await.map(|h| h as u32);
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors, &categories, claimable_at))
+        let claim = *self.claim_outcome.lock().await;
+        Ok(ExitStatusInfo::summarise(
+            exit.get_exit_vtxos(), errors, &categories, claimable_at, claim,
+        ))
     }
 
     /// The exit delta in blocks, or `None` when it cannot be known right now.
@@ -436,7 +473,10 @@ impl LarkWallet {
     pub async fn exit_status(&self) -> Result<ExitStatusInfo, LarkError> {
         let exit = self.inner.exit.read().await;
         let claimable_at = exit.all_claimable_at_height().await.map(|h| h as u32);
-        Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), Vec::new(), &[], claimable_at))
+        let claim = *self.claim_outcome.lock().await;
+        Ok(ExitStatusInfo::summarise(
+            exit.get_exit_vtxos(), Vec::new(), &[], claimable_at, claim,
+        ))
     }
 
     /// Wallet movements, newest-first is up to the caller (the seam's `activity`).
@@ -634,29 +674,46 @@ impl LarkWallet {
         &self,
         exit: &bark::exit::Exit,
         onchain: &mut OnchainWallet,
-    ) -> Result<(), String> {
+    ) -> Result<(), ClaimFailure> {
         let claimable = exit.list_claimable();
         if claimable.is_empty() {
             return Ok(());
         }
 
-        let destination = onchain
-            .address()
-            .await
-            .map_err(|e| format!("claim: no destination address: {e}"))?;
+        let destination = onchain.address().await.map_err(|e| ClaimFailure {
+            message: format!("claim: no destination address: {e}"),
+            category: ExitStallCategory::Unexpected,
+        })?;
 
         // Already signed and already fee-adjusted: `drain_exits` deducts the miner fee from the
         // claim's own output, so nothing else has to fund it.
+        // `drain_exits` already classifies its own failures, so reuse that judgement rather than
+        // second-guessing it: a fee above the output is uneconomic, a missing tip is the chain.
         let psbt = exit
             .drain_exits(&claimable, &self.inner, destination, None)
             .await
-            .map_err(|e| format!("claim: {e}"))?;
-        let tx = psbt.extract_tx().map_err(|e| format!("claim: unsignable: {e}"))?;
+            .map_err(|e| ClaimFailure {
+                category: ExitStallCategory::from(&e),
+                message: format!("claim: {e}"),
+            })?;
+        let tx = psbt.extract_tx().map_err(|e| ClaimFailure {
+            message: format!("claim: unsignable: {e}"),
+            category: ExitStallCategory::Unexpected,
+        })?;
+        // The one moment both figures are known: the output is what arrives, and the difference
+        // from the inputs is the fee that the receipt otherwise has to show as unknown.
+        let landed_sat = tx.output.first().map(|o| o.value.to_sat()).unwrap_or(0);
+        let inputs_sat: u64 = claimable.iter().map(|e| e.amount().to_sat()).sum();
+        *self.claim_outcome.lock().await =
+            Some(ClaimOutcome { landed_sat, fee_sat: inputs_sat.saturating_sub(landed_sat) });
         self.inner
             .chain
             .broadcast_tx(&tx)
             .await
-            .map_err(|e| format!("claim: broadcast refused: {e}"))?;
+            .map_err(|e| ClaimFailure {
+                message: format!("claim: broadcast refused: {e}"),
+                category: ExitStallCategory::BroadcastRejected,
+            })?;
         Ok(())
     }
 }
@@ -751,12 +808,16 @@ pub struct ExitStatusInfo {
     pub vtxo_count: u32,
     pub claimed_count: u32,
     pub total_sat: u64,
-    /// How much has actually landed on-chain, summed over the claimed VTXOs.
+    /// How much actually landed on-chain, or `None` when that is not known.
     ///
-    /// Separate from `claimed_count` because a count answers a different question: three of four
-    /// claimed says nothing about whether the fourth holds most of the money. A holder watching a
-    /// multi-hour exit is owed the amount, not just the tally.
-    pub claimed_sat: u64,
+    /// Deliberately not the claimed VTXOs' face value. A claim deducts its miner fee from its own
+    /// output, so the face value is what the money was worth before the claim, not what arrived —
+    /// reporting it as landed overstates by exactly the fee, on a screen whose subject is what the
+    /// holder got. `None` when nothing has been claimed yet, or when this process did not build
+    /// the claim and therefore never saw the figure.
+    pub landed_sat: Option<u64>,
+    /// What the claim cost in miner fees, or `None` on the same terms as `landed_sat`.
+    pub claim_fee_sat: Option<u64>,
     pub errors: Vec<String>,
     /// The category speaking for the wallet this pass, or `None` when nothing went wrong.
     pub stall_category: Option<ExitStallCategory>,
@@ -774,6 +835,7 @@ impl ExitStatusInfo {
         errors: Vec<String>,
         categories: &[ExitStallCategory],
         claimable_at_height: Option<u32>,
+        claim: Option<ClaimOutcome>,
     ) -> Self {
         let stages: Vec<ExitStage> = vtxos.iter().map(|v| ExitStage::from(v.state())).collect();
         ExitStatusInfo {
@@ -781,16 +843,56 @@ impl ExitStatusInfo {
             vtxo_count: vtxos.len() as u32,
             claimed_count: stages.iter().filter(|s| **s == ExitStage::Claimed).count() as u32,
             total_sat: vtxos.iter().map(|v| v.amount().to_sat()).sum(),
-            claimed_sat: vtxos
-                .iter()
-                .zip(&stages)
-                .filter(|(_, stage)| **stage == ExitStage::Claimed)
-                .map(|(v, _)| v.amount().to_sat())
-                .sum(),
             errors,
             stall_category: ExitStallCategory::aggregate(categories),
+            landed_sat: claim.map(|c| c.landed_sat),
+            claim_fee_sat: claim.map(|c| c.fee_sat),
             claimable_at_height,
         }
+    }
+}
+
+#[cfg(test)]
+mod claim_outcome_tests {
+    use super::{ClaimOutcome, ExitStatusInfo};
+
+    /// The defect this guards is a 0.25% overstatement that reads as a rounding artefact and is
+    /// not one: a claim deducts its fee from its own output, so the claimed VTXOs' face value is
+    /// what the money was worth *before* the claim. Reporting it as landed tells the holder they
+    /// received more than arrived, on the screen whose whole subject is what they got.
+    #[test]
+    fn landed_is_what_arrived_not_what_was_claimed() {
+        let outcome = ClaimOutcome { landed_sat: 119_350, fee_sat: 302 };
+        assert_eq!(outcome.landed_sat, 119_350);
+        assert_ne!(outcome.landed_sat, 119_652, "face value is not the landed amount");
+        assert_eq!(outcome.landed_sat + outcome.fee_sat, 119_652, "the difference is the fee");
+    }
+
+    /// Unknown is a real answer here. If this process did not build the claim it never saw the
+    /// figures, and falling back to the face value would reinstate exactly the overstatement
+    /// above — quietly, and only after a restart, which is the worst way to reintroduce it.
+    #[test]
+    fn an_unbuilt_claim_reports_unknown_rather_than_face_value() {
+        let info = ExitStatusInfo::summarise(&[], Vec::new(), &[], None, None);
+        assert_eq!(info.landed_sat, None);
+        assert_eq!(info.claim_fee_sat, None);
+    }
+
+    #[test]
+    fn a_built_claim_reports_both_figures() {
+        let outcome = ClaimOutcome { landed_sat: 119_350, fee_sat: 302 };
+        let info = ExitStatusInfo::summarise(&[], Vec::new(), &[], None, Some(outcome));
+        assert_eq!(info.landed_sat, Some(119_350));
+        assert_eq!(info.claim_fee_sat, Some(302));
+    }
+
+    /// A claim whose fee somehow exceeded its inputs must not wrap into a vast bogus fee; the
+    /// saturating subtraction is load-bearing, not defensive decoration.
+    #[test]
+    fn an_impossible_fee_saturates_rather_than_wrapping() {
+        let landed: u64 = 500;
+        let inputs: u64 = 100;
+        assert_eq!(inputs.saturating_sub(landed), 0);
     }
 }
 

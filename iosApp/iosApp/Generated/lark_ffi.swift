@@ -1401,13 +1401,19 @@ public struct ExitStatusInfo {
     public var claimedCount: UInt32
     public var totalSat: UInt64
     /**
-     * How much has actually landed on-chain, summed over the claimed VTXOs.
+     * How much actually landed on-chain, or `None` when that is not known.
      *
-     * Separate from `claimed_count` because a count answers a different question: three of four
-     * claimed says nothing about whether the fourth holds most of the money. A holder watching a
-     * multi-hour exit is owed the amount, not just the tally.
+     * Deliberately not the claimed VTXOs' face value. A claim deducts its miner fee from its own
+     * output, so the face value is what the money was worth before the claim, not what arrived —
+     * reporting it as landed overstates by exactly the fee, on a screen whose subject is what the
+     * holder got. `None` when nothing has been claimed yet, or when this process did not build
+     * the claim and therefore never saw the figure.
      */
-    public var claimedSat: UInt64
+    public var landedSat: UInt64?
+    /**
+     * What the claim cost in miner fees, or `None` on the same terms as `landed_sat`.
+     */
+    public var claimFeeSat: UInt64?
     public var errors: [String]
     /**
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
@@ -1426,12 +1432,17 @@ public struct ExitStatusInfo {
     // declare one manually.
     public init(stage: ExitStage, vtxoCount: UInt32, claimedCount: UInt32, totalSat: UInt64, 
         /**
-         * How much has actually landed on-chain, summed over the claimed VTXOs.
+         * How much actually landed on-chain, or `None` when that is not known.
          *
-         * Separate from `claimed_count` because a count answers a different question: three of four
-         * claimed says nothing about whether the fourth holds most of the money. A holder watching a
-         * multi-hour exit is owed the amount, not just the tally.
-         */claimedSat: UInt64, errors: [String], 
+         * Deliberately not the claimed VTXOs' face value. A claim deducts its miner fee from its own
+         * output, so the face value is what the money was worth before the claim, not what arrived —
+         * reporting it as landed overstates by exactly the fee, on a screen whose subject is what the
+         * holder got. `None` when nothing has been claimed yet, or when this process did not build
+         * the claim and therefore never saw the figure.
+         */landedSat: UInt64?, 
+        /**
+         * What the claim cost in miner fees, or `None` on the same terms as `landed_sat`.
+         */claimFeeSat: UInt64?, errors: [String], 
         /**
          * The category speaking for the wallet this pass, or `None` when nothing went wrong.
          */stallCategory: ExitStallCategory?, 
@@ -1446,7 +1457,8 @@ public struct ExitStatusInfo {
         self.vtxoCount = vtxoCount
         self.claimedCount = claimedCount
         self.totalSat = totalSat
-        self.claimedSat = claimedSat
+        self.landedSat = landedSat
+        self.claimFeeSat = claimFeeSat
         self.errors = errors
         self.stallCategory = stallCategory
         self.claimableAtHeight = claimableAtHeight
@@ -1469,7 +1481,10 @@ extension ExitStatusInfo: Equatable, Hashable {
         if lhs.totalSat != rhs.totalSat {
             return false
         }
-        if lhs.claimedSat != rhs.claimedSat {
+        if lhs.landedSat != rhs.landedSat {
+            return false
+        }
+        if lhs.claimFeeSat != rhs.claimFeeSat {
             return false
         }
         if lhs.errors != rhs.errors {
@@ -1489,7 +1504,8 @@ extension ExitStatusInfo: Equatable, Hashable {
         hasher.combine(vtxoCount)
         hasher.combine(claimedCount)
         hasher.combine(totalSat)
-        hasher.combine(claimedSat)
+        hasher.combine(landedSat)
+        hasher.combine(claimFeeSat)
         hasher.combine(errors)
         hasher.combine(stallCategory)
         hasher.combine(claimableAtHeight)
@@ -1508,7 +1524,8 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
                 vtxoCount: FfiConverterUInt32.read(from: &buf), 
                 claimedCount: FfiConverterUInt32.read(from: &buf), 
                 totalSat: FfiConverterUInt64.read(from: &buf), 
-                claimedSat: FfiConverterUInt64.read(from: &buf), 
+                landedSat: FfiConverterOptionUInt64.read(from: &buf), 
+                claimFeeSat: FfiConverterOptionUInt64.read(from: &buf), 
                 errors: FfiConverterSequenceString.read(from: &buf), 
                 stallCategory: FfiConverterOptionTypeExitStallCategory.read(from: &buf), 
                 claimableAtHeight: FfiConverterOptionUInt32.read(from: &buf)
@@ -1520,7 +1537,8 @@ public struct FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.vtxoCount, into: &buf)
         FfiConverterUInt32.write(value.claimedCount, into: &buf)
         FfiConverterUInt64.write(value.totalSat, into: &buf)
-        FfiConverterUInt64.write(value.claimedSat, into: &buf)
+        FfiConverterOptionUInt64.write(value.landedSat, into: &buf)
+        FfiConverterOptionUInt64.write(value.claimFeeSat, into: &buf)
         FfiConverterSequenceString.write(value.errors, into: &buf)
         FfiConverterOptionTypeExitStallCategory.write(value.stallCategory, into: &buf)
         FfiConverterOptionUInt32.write(value.claimableAtHeight, into: &buf)
@@ -2394,6 +2412,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

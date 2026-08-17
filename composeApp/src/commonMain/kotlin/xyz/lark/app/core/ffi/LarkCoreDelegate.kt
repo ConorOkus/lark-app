@@ -216,8 +216,10 @@ data class FfiExitStatus(
     val vtxoCount: Int,
     val claimedCount: Int,
     val totalSat: Long,
-    /** Summed over the claimed VTXOs — how much has actually landed, not just how many have. */
-    val claimedSat: Long = 0L,
+    /** What the claim actually paid out, or null when this process did not build it. */
+    val landedSat: Long? = null,
+    /** What that claim cost in miner fees, on the same terms as [landedSat]. */
+    val claimFeeSat: Long? = null,
     val errors: List<String>,
     val stallCategory: FfiExitStallCategory? = null,
     /** Height at which every exiting VTXO becomes claimable; null until the exit knows. */

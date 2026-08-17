@@ -47,7 +47,10 @@ class ExitResumeTest {
         // The wallet is still opening: nothing can be claimed about the exit yet.
         assertEquals(null, m.model.value.exiting, "no exit may be reported before one is read")
 
-        advanceTimeBy(3_000)
+        // Retries back off — 500ms, then doubling — so four unreadable reads span about 7.5s.
+        // Deliberately not tuned to the exact sum: the property is that it keeps asking and
+        // eventually succeeds, not that it does so on a particular tick.
+        advanceTimeBy(20_000)
         runCurrent()
         assertNotNull(m.model.value.exiting, "the exit must be picked up once the wallet can answer")
     }
@@ -57,7 +60,7 @@ class ExitResumeTest {
         val exit = FakeWalletExit(startedAlready = true).apply { unreadableReads = 2 }
         val m = machine(exit)
         runCurrent()
-        advanceTimeBy(3_000)
+        advanceTimeBy(20_000)
         runCurrent()
         val passesAtResume = exit.passes
 
@@ -72,7 +75,7 @@ class ExitResumeTest {
         val exit = FakeWalletExit().apply { unreadableReads = 2 }
         val m = machine(exit)
         runCurrent()
-        advanceTimeBy(3_000)
+        advanceTimeBy(20_000)
         runCurrent()
 
         assertEquals(null, m.model.value.exiting)

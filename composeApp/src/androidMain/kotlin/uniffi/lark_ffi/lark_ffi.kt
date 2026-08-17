@@ -2553,13 +2553,19 @@ data class ExitStatusInfo (
     var `claimedCount`: kotlin.UInt, 
     var `totalSat`: kotlin.ULong, 
     /**
-     * How much has actually landed on-chain, summed over the claimed VTXOs.
+     * How much actually landed on-chain, or `None` when that is not known.
      *
-     * Separate from `claimed_count` because a count answers a different question: three of four
-     * claimed says nothing about whether the fourth holds most of the money. A holder watching a
-     * multi-hour exit is owed the amount, not just the tally.
+     * Deliberately not the claimed VTXOs' face value. A claim deducts its miner fee from its own
+     * output, so the face value is what the money was worth before the claim, not what arrived —
+     * reporting it as landed overstates by exactly the fee, on a screen whose subject is what the
+     * holder got. `None` when nothing has been claimed yet, or when this process did not build
+     * the claim and therefore never saw the figure.
      */
-    var `claimedSat`: kotlin.ULong, 
+    var `landedSat`: kotlin.ULong?, 
+    /**
+     * What the claim cost in miner fees, or `None` on the same terms as `landed_sat`.
+     */
+    var `claimFeeSat`: kotlin.ULong?, 
     var `errors`: List<kotlin.String>, 
     /**
      * The category speaking for the wallet this pass, or `None` when nothing went wrong.
@@ -2588,7 +2594,8 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalTypeExitStallCategory.read(buf),
             FfiConverterOptionalUInt.read(buf),
@@ -2600,7 +2607,8 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.allocationSize(value.`vtxoCount`) +
             FfiConverterUInt.allocationSize(value.`claimedCount`) +
             FfiConverterULong.allocationSize(value.`totalSat`) +
-            FfiConverterULong.allocationSize(value.`claimedSat`) +
+            FfiConverterOptionalULong.allocationSize(value.`landedSat`) +
+            FfiConverterOptionalULong.allocationSize(value.`claimFeeSat`) +
             FfiConverterSequenceString.allocationSize(value.`errors`) +
             FfiConverterOptionalTypeExitStallCategory.allocationSize(value.`stallCategory`) +
             FfiConverterOptionalUInt.allocationSize(value.`claimableAtHeight`)
@@ -2611,7 +2619,8 @@ public object FfiConverterTypeExitStatusInfo: FfiConverterRustBuffer<ExitStatusI
             FfiConverterUInt.write(value.`vtxoCount`, buf)
             FfiConverterUInt.write(value.`claimedCount`, buf)
             FfiConverterULong.write(value.`totalSat`, buf)
-            FfiConverterULong.write(value.`claimedSat`, buf)
+            FfiConverterOptionalULong.write(value.`landedSat`, buf)
+            FfiConverterOptionalULong.write(value.`claimFeeSat`, buf)
             FfiConverterSequenceString.write(value.`errors`, buf)
             FfiConverterOptionalTypeExitStallCategory.write(value.`stallCategory`, buf)
             FfiConverterOptionalUInt.write(value.`claimableAtHeight`, buf)
@@ -3135,6 +3144,38 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
         } else {
             buf.put(1)
             FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
         }
     }
 }

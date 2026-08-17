@@ -116,7 +116,11 @@ class FakeWalletExit(
      */
     override suspend fun pendingReceipt(): ExitReceipt? =
         if (exitStatus.stage == ExitStage.CLAIMED && !receiptAcknowledged) {
-            ExitReceipt(landedSats = inFlightSats, tookMillis = TOOK_MILLIS)
+            ExitReceipt(
+                landedSats = inFlightSats - CLAIM_FEE_SATS,
+                feeSats = CLAIM_FEE_SATS,
+                tookMillis = TOOK_MILLIS,
+            )
         } else {
             null
         }
@@ -133,7 +137,8 @@ class FakeWalletExit(
             vtxoCount = vtxoCount,
             claimedCount = claimed,
             inFlightSats = if (stage == ExitStage.CLAIMED) 0 else inFlightSats,
-            landedSats = if (stage == ExitStage.CLAIMED) inFlightSats else 0,
+            landedSats = if (stage == ExitStage.CLAIMED) inFlightSats - CLAIM_FEE_SATS else null,
+            claimFeeSats = if (stage == ExitStage.CLAIMED) CLAIM_FEE_SATS else null,
             claimableAtHeight = heights.claimableAtHeight,
         )
     }
@@ -175,6 +180,13 @@ class FakeWalletExit(
          * launches. Three hours is what a real mutinynet exit roughly costs.
          */
         const val TOOK_MILLIS: Long = 3L * 60 * 60 * 1_000
+
+        /**
+         * What a scripted claim costs. Non-zero on purpose: a fake that claimed for free could not
+         * express the gap between a VTXO's face value and what actually arrives, which is the gap
+         * the receipt got wrong.
+         */
+        const val CLAIM_FEE_SATS: Long = 302
 
         /** The ordinary path: start, broadcast, wait out the delay, become claimable, claim. */
         val DEFAULT_SCRIPT = listOf(

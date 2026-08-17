@@ -37,8 +37,9 @@ internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? 
         vtxoCount = reported.vtxoCount,
         claimedCount = reported.claimedCount,
         // Nothing is in flight once everything is claimed, whatever the exit set still sums to.
-        inFlightSats = if (stage == ExitStage.CLAIMED) 0L else reported.totalSat - reported.claimedSat,
-        landedSats = reported.claimedSat,
+        inFlightSats = if (stage == ExitStage.CLAIMED) 0L else reported.totalSat,
+        landedSats = reported.landedSat,
+        claimFeeSats = reported.claimFeeSat,
         stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
         // The engine's message deliberately does not cross: `errors` holds VTXO ids and the
         // engine's own wording, and the seam's reason is what a headline renders.

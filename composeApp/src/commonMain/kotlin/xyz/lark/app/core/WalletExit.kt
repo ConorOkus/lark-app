@@ -43,18 +43,6 @@ interface WalletExit {
     suspend fun progressExit(): ExitStatus
 
     /**
-     * How many blocks a started exit must wait out, or null when it cannot be known.
-     *
-     * Needed only *before* an exit exists, to estimate how long one would take. Once an exit is
-     * running its claimable height is persisted and [ExitStatus.claimableAtHeight] answers without
-     * this.
-     *
-     * Null is an honest answer rather than a failure: the delta lives on the Ark server, so a
-     * wallet that cannot reach one cannot know it — which is exactly the wallet most likely to be
-     * reading an exit screen. Callers show an unknown; substituting a default would put a wrong
-     * wait under a button that cannot be taken back.
-     */
-    /**
      * Where the exit stands, or null when that could not be determined *right now*.
      *
      * Null is not "no exit" — it is "ask again". The distinction is the whole reason this exists:
@@ -67,6 +55,18 @@ interface WalletExit {
      */
     suspend fun readExitStatus(): ExitStatus?
 
+    /**
+     * How many blocks a started exit must wait out, or null when it cannot be known.
+     *
+     * Needed only *before* an exit exists, to estimate how long one would take. Once an exit is
+     * running its claimable height is persisted and [ExitStatus.claimableAtHeight] answers without
+     * this.
+     *
+     * Null is an honest answer rather than a failure: the delta lives on the Ark server, so a
+     * wallet that cannot reach one cannot know it — which is exactly the wallet most likely to be
+     * reading an exit screen. Callers show an unknown; substituting a default would put a wrong
+     * wait under a button that cannot be taken back.
+     */
     suspend fun exitDeltaBlocks(): Int?
 
     /**
@@ -87,12 +87,13 @@ interface WalletExit {
 /**
  * What a finished exit is worth saying: how much arrived, and how long it took.
  *
- * No fee, because nothing records one. The engine's claimed state keeps a txid and a block height
- * and no amount, so the fee actually paid could only be recovered by reading the claim transaction
- * back off the chain — which this app does not do, and will not guess at.
+ * Both figures are known only to the process that built the claim: the engine's claimed state
+ * keeps a txid and a block and no amounts. Either may be null, and null renders as an em-dash
+ * rather than as a plausible-looking substitute.
  */
 data class ExitReceipt(
-    val landedSats: Long,
+    val landedSats: Long?,
+    val feeSats: Long?,
     val tookMillis: Long,
 )
 
@@ -178,14 +179,16 @@ data class ExitStatus(
     val claimedCount: Int = 0,
     val inFlightSats: Long = 0,
     /**
-     * How much has landed on-chain so far, summed over the claimed VTXOs.
+     * How much actually landed on-chain, or null when that is not known.
      *
-     * Paired with [inFlightSats] rather than derived from it: together they say where the money
-     * is, which is the question a holder watching a multi-hour exit actually has. A count of
-     * claimed VTXOs cannot answer it — three of four claimed says nothing about whether the
-     * fourth holds most of the value.
+     * Not the claimed VTXOs' face value: a claim pays its miner fee out of its own output, so the
+     * face value is what the money was worth before the claim rather than what arrived. Null when
+     * nothing has been claimed, or when this process did not build the claim and so never saw the
+     * figure — an em-dash, not a number that is close enough.
      */
-    val landedSats: Long = 0,
+    val landedSats: Long? = null,
+    /** What the claim cost in miner fees, on the same terms as [landedSats]. */
+    val claimFeeSats: Long? = null,
     val stalled: Boolean = false,
     val reason: ExitStallReason? = null,
     /**

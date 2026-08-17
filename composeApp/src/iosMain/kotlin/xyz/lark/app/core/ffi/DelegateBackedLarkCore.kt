@@ -264,6 +264,7 @@ class DelegateBackedLarkCore(
         store.loadExitTimes()?.takeIf { it.completedAt != null }?.let { times ->
             ExitReceipt(
                 landedSats = exitStatus.landedSats,
+                feeSats = exitStatus.claimFeeSats,
                 tookMillis = (times.completedAt!! - times.startedAt).coerceAtLeast(0L),
             )
         }

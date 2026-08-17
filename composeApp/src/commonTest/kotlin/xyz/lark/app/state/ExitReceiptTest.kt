@@ -112,7 +112,10 @@ class ExitReceiptTest {
 
         val done = assertNotNull(m.model.value.exitDone)
         assertTrue(done.landed.isNotBlank())
-        // The cost is not recorded by the engine, so it reads as unknown rather than as a figure.
-        assertEquals("—", done.minerFee)
+        // Both figures come from the claim as it was built, so the fee is a number rather than the
+        // em-dash it used to be — and the landed amount is what arrived, not the claimed VTXOs'
+        // face value, which is larger by exactly that fee.
+        assertEquals("₿302", done.minerFee)
+        assertEquals("₿249,698", done.landed)
     }
 }
