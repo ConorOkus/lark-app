@@ -391,6 +391,18 @@ impl LarkWallet {
                 })
             })
             .unzip();
+        // Claiming is not something progressing does. `ExitClaimableState::progress` only *looks*
+        // — it checks whether the exit output has already been spent and, finding it has not,
+        // reports claimable again. Nothing in the progress path ever builds the transaction that
+        // spends it, so an exit that has waited out its whole delay stops one step from the end
+        // and stays there. `drain_exits` is the only thing that finishes an exit, and it has to be
+        // asked.
+        let claim_error = self.claim_claimable(&exit, &mut *onchain).await.err();
+        let errors = match claim_error {
+            Some(e) => errors.into_iter().chain(std::iter::once(e)).collect(),
+            None => errors,
+        };
+
         let claimable_at = exit.all_claimable_at_height().await.map(|h| h as u32);
         Ok(ExitStatusInfo::summarise(exit.get_exit_vtxos(), errors, &categories, claimable_at))
     }
@@ -596,6 +608,56 @@ impl From<&ExitState> for ExitStage {
             | ExitState::ChannelCommitment(_)
             | ExitState::ChannelSwept(_) => ExitStage::Unsupported,
         }
+    }
+}
+
+/// Helpers that never cross the FFI boundary.
+///
+/// Separate from the exported impl because `#[uniffi::export]` lifts every method it
+/// covers, and these take bark types that have no representation across the boundary.
+impl LarkWallet {
+    /// Spend every claimable exit into the wallet's own on-chain address.
+    ///
+    /// The last step of an exit, and the only one nothing else performs. Claims land in the
+    /// wallet's own address rather than one the holder names (KTD-3): the exit finishes on its own
+    /// without waiting for anybody to supply a destination, and moving the funds onward afterwards
+    /// is an ordinary send.
+    ///
+    /// Errors are returned rather than propagated so a failed claim is reported like any other
+    /// failing pass — it is retried on the next one, and a claim that cannot be built yet (fees
+    /// above the output, a reorg) is exactly the sort of thing that clears by itself.
+    /// Takes the caller's on-chain guard rather than locking again. `progress_exit` already
+    /// holds it, and `tokio::sync::Mutex` is not reentrant — re-locking here deadlocked the first
+    /// claimable pass while holding both this and the exit write lock, which stalled every poll
+    /// cycle behind it and left the wallet looking permanently offline.
+    async fn claim_claimable(
+        &self,
+        exit: &bark::exit::Exit,
+        onchain: &mut OnchainWallet,
+    ) -> Result<(), String> {
+        let claimable = exit.list_claimable();
+        if claimable.is_empty() {
+            return Ok(());
+        }
+
+        let destination = onchain
+            .address()
+            .await
+            .map_err(|e| format!("claim: no destination address: {e}"))?;
+
+        // Already signed and already fee-adjusted: `drain_exits` deducts the miner fee from the
+        // claim's own output, so nothing else has to fund it.
+        let psbt = exit
+            .drain_exits(&claimable, &self.inner, destination, None)
+            .await
+            .map_err(|e| format!("claim: {e}"))?;
+        let tx = psbt.extract_tx().map_err(|e| format!("claim: unsignable: {e}"))?;
+        self.inner
+            .chain
+            .broadcast_tx(&tx)
+            .await
+            .map_err(|e| format!("claim: broadcast refused: {e}"))?;
+        Ok(())
     }
 }
 
