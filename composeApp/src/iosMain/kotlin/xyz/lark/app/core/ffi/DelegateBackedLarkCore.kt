@@ -20,6 +20,8 @@ import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
+import xyz.lark.app.core.OnchainSendQuote
 import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.gateway.arkReceiveUri
 import xyz.lark.app.core.model.AdvancedStats
@@ -106,7 +108,7 @@ class DelegateBackedLarkCore(
     private val config: FfiWalletConfig,
     override val networkLabel: String,
     private val tuning: FfiTuning = FfiTuning(),
-) : LarkCore, OnchainFunding, WalletExit {
+) : LarkCore, OnchainFunding, WalletExit, OnchainSend {
 
     /** Seeded from disk, not from the open: see the class comment's point 3. */
     private val walletExistsFlow = MutableStateFlow(store.walletFileExists())
@@ -263,6 +265,18 @@ class DelegateBackedLarkCore(
         }
 
     override suspend fun acknowledgeReceipt() = store.storeExitTimes(null)
+
+    // --- On-chain send ---
+
+    /** Confirmed only: an unconfirmed input cannot reliably fund a spend the holder is about to make. */
+    override val spendableSats: Long get() = onchain?.confirmedSat ?: 0L
+
+    override suspend fun quoteOnchainSend(address: String, sats: Long): OnchainSendQuote? =
+        delegate.awaitValue<FfiOnchainFeeQuote> { onResult -> onchainSendFee(address, sats, onResult) }
+            ?.let { OnchainSendQuote(feeSats = it.feeSat, totalSats = it.totalSat) }
+
+    override suspend fun sendOnchain(address: String, sats: Long): String? =
+        delegate.awaitValue<String> { onResult -> onchainSend(address, sats, onResult) }
 
     /**
      * Null when the crate cannot answer, which includes both "no server to ask" and a failed call.

@@ -82,6 +82,26 @@ data class SendModel(
     val inputSummary: String = "",
     /** The destination carries its own amount, so the keypad is skipped and cannot override it. */
     val fixedAmount: Boolean = false,
+    /**
+     * The on-chain route line for review, or null when this is an ordinary off-chain send.
+     *
+     * Present only for a bitcoin address, because that is the only case where the holder is about
+     * to do something materially different from what Pay usually does: slower, irreversible, and
+     * out of a different balance. An ordinary Ark or Lightning send says nothing extra.
+     */
+    val onchainRoute: OnchainRouteModel? = null,
+)
+
+/**
+ * What review says about a spend that is leaving on-chain.
+ *
+ * [fee] is an em-dash until the quote lands, and stays one if it cannot be produced. That is the
+ * honest reading: R12 requires the fee be named before the holder confirms, and a figure invented
+ * to fill the row would be attached to the one action in this flow that cannot be taken back.
+ */
+data class OnchainRouteModel(
+    val fee: String,
+    val total: String,
 )
 
 /** One pre-formatted activity row; [amount] is signed in the current denomination. */

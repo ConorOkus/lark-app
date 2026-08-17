@@ -8,6 +8,7 @@ import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
 import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.ffi.FfiCoreProvider
 import xyz.lark.app.core.gateway.BarkdApi
@@ -26,6 +27,7 @@ internal data class CoreSelection(
     val demo: DemoControls?,
     val funding: OnchainFunding? = null,
     val walletExit: WalletExit? = null,
+    val onchainSend: OnchainSend? = null,
 )
 
 /**
@@ -68,6 +70,7 @@ internal fun buildCore(
             demo = null,
             funding = core as? OnchainFunding,
             walletExit = core as? WalletExit,
+            onchainSend = core as? OnchainSend,
         )
     }
     CoreMode.GATEWAY -> {

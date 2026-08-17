@@ -62,6 +62,7 @@ private object AppGraph {
             scope = scope,
             funding = selection.funding,
             walletExit = selection.walletExit,
+            onchainSend = selection.onchainSend,
         )
     }
 }

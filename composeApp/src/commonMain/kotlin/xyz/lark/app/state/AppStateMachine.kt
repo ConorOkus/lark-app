@@ -16,6 +16,8 @@ import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
+import xyz.lark.app.core.OnchainSendQuote
 import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.format.EXPIRY_PLACEHOLDER
 import xyz.lark.app.core.format.MUTINYNET_BLOCK_SECONDS
@@ -166,6 +168,14 @@ private data class MachineState(
     /** The finished exit's figures, held from the moment it completes until the receipt is gone. */
     val exitReceipt: ExitReceipt? = null,
     /**
+     * What the pending on-chain spend would cost, once the quote lands.
+     *
+     * Null until it does, and null again if it cannot be produced — review renders an em-dash
+     * either way rather than filling the row, because the figure sits under a confirm button for
+     * a transaction nobody can recall.
+     */
+    val onchainQuote: OnchainSendQuote? = null,
+    /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
      * A count rather than a flag because one failure is noise and three is a problem, and only a
@@ -203,12 +213,19 @@ private data class MachineState(
  * is absolute — coroutine suspension can't stretch it. [demo] is the demo-only seam (KTD-3):
  * when absent, demo affordances vanish from the model.
  */
-@Suppress("TooManyFunctions") // one small intent function per prototype interaction, by design
+// TooManyFunctions: one small intent function per prototype interaction, by design.
 // LongParameterList: every parameter is an injection seam — the core, its two optional
 // capabilities, two clocks with deliberately different semantics, and the scope. Each is
 // substituted independently by tests, so bundling them into a parameter object would exist only to
 // satisfy the threshold while making the common construction (core + scope) read worse.
-class AppStateMachine @Suppress("LongParameterList") constructor(
+// LargeClass is suppressed rather than fixed, and the distinction matters: this is not one
+// oversized routine but roughly twenty small `render*` functions, each a pure MachineState → model
+// mapping. Splitting them means moving the whole render layer out and widening MachineState's
+// visibility to do it — a refactor of long-standing code, worth doing deliberately rather than as
+// a side effect of adding a destination kind. The copy layers (ExitCopy, SendCopy) were extracted
+// on the way here and are the pattern to continue with.
+@Suppress("TooManyFunctions", "LargeClass", "LongParameterList")
+class AppStateMachine constructor(
     private val core: LarkCore,
     private val demo: DemoControls? = null,
     private val scope: CoroutineScope,
@@ -223,6 +240,7 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
      * is what keeps the exit screen's promise honest on cores that cannot keep it.
      */
     private val walletExit: WalletExit? = null,
+    private val onchainSend: OnchainSend? = null,
     /**
      * Wall-clock epoch millis, for the one deadline that has to survive the app being closed.
      *
@@ -519,7 +537,7 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             requestReceiveAmount(typedSats(s))
             back()
         } else {
-            push(Route.REVIEW)
+            goReview()
         }
     }
 
@@ -605,7 +623,29 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             return
         }
         update { it.copy(digits = "", scannedSats = fixedAmount, mode = KeypadMode.SEND) }
+        goReview()
+    }
+
+    /**
+     * Open review, quoting the miner fee first when the destination is on-chain.
+     *
+     * The quote is fetched rather than blocked on: review renders immediately with the fee as an
+     * unknown and fills it in when the answer arrives. Blocking would stall the screen on a chain
+     * source that may be slow or gone, and the confirm button reads the same model — so a quote
+     * that never lands leaves an em-dash under it rather than a number nobody computed.
+     */
+    private fun goReview() {
         push(Route.REVIEW)
+        update { it.copy(onchainQuote = null) }
+        val destination = classifySendInput(state.input).takeIf { it.isOnchain }?.destination
+        val send = onchainSend
+        if (destination == null || send == null) return
+        val sats = typedSats(state)
+        scope.launch {
+            val quote = runCatching { send.quoteOnchainSend(destination, sats) }.getOrNull()
+            // Only apply while this is still the spend being reviewed.
+            update { if (it.route == Route.REVIEW) it.copy(onchainQuote = quote) else it }
+        }
     }
 
     /** Picking a recent pre-fills the recipient and jumps to a fresh send keypad. */
@@ -637,7 +677,7 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
                 mode = KeypadMode.SEND,
             )
         }
-        go(Route.REVIEW)
+        goReview()
     }
 
     /**
@@ -665,13 +705,30 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
     private fun startSend() {
         // A wallet mid-exit has no VTXOs left to spend. Asking the core anyway would surface the
         // true reason as whatever engine error came back, so the refusal belongs here.
-        if (state.exit.isExiting) return
+        //
+        // On-chain is exempt: it spends the on-chain balance, which an exit fills rather than
+        // empties, and refusing it would strand exit proceeds behind the exit that produced them.
+        val onchain = classifySendInput(state.confirmedRecipient).isOnchain
+        if (state.exit.isExiting && !onchain) return
         push(Route.SENDING)
         workJob?.cancel()
         workJob = scope.launch {
-            val result = core.send(state.confirmedRecipient, state.confirmedSats)
+            val result = if (onchain) sendOnchain() else core.send(state.confirmedRecipient, state.confirmedSats)
             landIfStillSending(landingFor(result))
         }
+    }
+
+    /**
+     * Spend the on-chain balance, mapped onto the same result the Ark path returns.
+     *
+     * A broadcast transaction is settlement in the sense this app means it — it is on the network
+     * and nothing further can retract it — so this lands on Sent rather than Pending. That is the
+     * opposite call from the Ark path, where an accepted payment can still fail later.
+     */
+    private suspend fun sendOnchain(): SendResult {
+        val send = onchainSend ?: return SendResult.Failure
+        val txid = send.sendOnchain(state.confirmedRecipient, state.confirmedSats)
+        return if (txid != null) SendResult.Success else SendResult.Failure
     }
 
     /**
@@ -1080,18 +1137,26 @@ class AppStateMachine @Suppress("LongParameterList") constructor(
             inputResolved = input.isResolved,
             inputSummary = sendInputSummary(s, input),
             fixedAmount = input.amountSat != null,
+            onchainRoute = if (input.isOnchain) {
+                OnchainRouteModel(
+                    fee = s.onchainQuote?.let { primary(it.feeSats, s.denomination) }
+                        ?: EXPIRY_PLACEHOLDER,
+                    total = s.onchainQuote?.let { primary(it.totalSats, s.denomination) }
+                        ?: EXPIRY_PLACEHOLDER,
+                )
+            } else {
+                null
+            },
         )
     }
 
     /** The line under the input card: what was recognized, or that nothing was. */
-    private fun sendInputSummary(s: MachineState, input: SendInput): String = when {
-        s.input.isBlank() && s.pasteFailed ->
-            "Nothing came through from the clipboard. Long-press the field to paste, or type it in."
-        s.input.isBlank() -> "A name, an invoice, or a bitcoin address — LARK works out the rest."
-        !input.isResolved -> "That doesn’t look like an invoice or address LARK can pay."
-        input.amountSat != null -> "Invoice for ${primary(input.amountSat, s.denomination)}."
-        else -> "Ready to pay ${input.display}."
-    }
+    private fun sendInputSummary(s: MachineState, input: SendInput): String = sendSummary(
+        typed = s.input,
+        pasteFailed = s.pasteFailed,
+        input = input,
+        invoiceAmount = input.amountSat?.let { primary(it, s.denomination) },
+    )
 
     private fun renderTxDetail(s: MachineState): TxDetailModel {
         val tx = core.activity.getOrNull(s.txIndex) ?: core.activity.firstOrNull()
