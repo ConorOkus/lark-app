@@ -174,10 +174,16 @@ cd rust/lark-ffi
 LARK_DRILL_DATADIR=/tmp/exit-drill \
 LARK_DRILL_MNEMONIC="<twelve words>" \
 LARK_DRILL_ESPLORA=https://mutinynet.com/api \
-LARK_DRILL_ARK=https://lark-captaind.fly.dev \
+LARK_DRILL_ARK=http://lark-captaind.fly.dev:3535 \
 LARK_DRILL_WITHDRAW=<an address you control> \
 cargo run --bin exit-drill
 ```
+
+`http`, and the port, both matter. captaind serves plaintext gRPC on 3535 and
+Fly's edge has nothing on 443, so `https://lark-captaind.fly.dev` accepts the
+connection and then never speaks — the drill will sit for 15 seconds and come
+back with no Ark server rather than telling you the URL is wrong. (Before the
+connect was bounded it sat there forever, which is how that bug was found.)
 
 Then stop captaind and re-run the same command unchanged:
 

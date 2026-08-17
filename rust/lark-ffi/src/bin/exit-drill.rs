@@ -113,6 +113,16 @@ async fn ensure_something_to_exit(
     cfg: &Config,
     started: Instant,
 ) -> Result<(), Outcome> {
+    // Sync before reading, because the balance read is local. A VTXO paid in out of round arrives
+    // through the mailbox and is invisible until maintenance collects it, so without this a wallet
+    // funded by an Ark payment reads as empty and the drill skips with money sitting in it.
+    //
+    // Failure is ignored rather than fatal: maintenance needs the Ark server, and a run with the
+    // server down is the run that matters. What is already registered is still there to exit.
+    if let Err(e) = wallet.refresh().await {
+        log(started, 0, &format!("could not sync first ({e}) — reading what is already registered"));
+    }
+
     let balance = wallet.balance_sats().await.map_err(fail("could not read the balance"))?;
     if balance > 0 {
         log(started, 0, &format!("{balance} sat off-chain already — no boarding needed"));
