@@ -367,6 +367,14 @@ impl LarkWallet {
         // Write guard on `exit` while `&self.inner` is passed alongside it: this is bark's own
         // idiom (`Wallet::sync_exits`), so `progress_exits` does not re-enter the lock.
         let mut exit = self.inner.exit.write().await;
+        // Sync before progressing, and not as an optimisation: `progress_exits` advances states
+        // from the transaction manager's view of the chain, and only `sync_no_progress` updates
+        // that view. Without it the manager never learns an exit transaction confirmed, so every
+        // pass re-decides on stale information and an exit whose transactions are all confirmed
+        // sits in `Processing` for as long as the app is willing to poll — which is forever, since
+        // nothing about it looks like a failure. bark's own doc comment says the two halves have to
+        // be called together; this is that pairing.
+        exit.sync_no_progress(&*onchain).await.map_err(LarkError::from)?;
         let statuses = exit
             .progress_exits(&self.inner, &mut *onchain, None)
             .await
