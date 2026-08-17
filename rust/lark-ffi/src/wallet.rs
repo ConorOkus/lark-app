@@ -1160,3 +1160,55 @@ pub struct StateBlobPlaintext {
     pub plaintext: Vec<u8>,
     pub version: u64,
 }
+
+/// The Ark handshake must give up rather than wait forever.
+///
+/// This guards a fork bump, not our own code — the bound lives in bark's `ServerConnection::connect`
+/// — and it is here because the failure it prevents is ours to suffer. A server that *refuses* a
+/// connection has always been handled: bark logs the failed handshake and carries on with no
+/// server, which is what lets a unilateral exit run while captaind is down. A server that *accepts*
+/// the connection and then never speaks HTTP/2 used to fall through every bound in the stack —
+/// `connect_timeout` covers reaching the socket and `timeout` covers requests on an established
+/// channel, and the h2 handshake sits between them.
+///
+/// Observed against a wedged mutinynet captaind on 2026-08-17: the wallet never finished opening,
+/// killed at 590 seconds having produced no output at all. A wallet that cannot open cannot reach
+/// the exit, so the one failure unilateral exit exists to survive was the one that disabled it.
+#[cfg(test)]
+mod ark_connect_timeout_tests {
+    use bitcoin::Network;
+    use server_rpc::ServerConnection;
+    use std::time::{Duration, Instant};
+    use tokio::net::TcpListener;
+
+    /// Generous against the 15s bound: this asserts termination, not the exact deadline, so a
+    /// slower machine cannot make it flap. Before the fix it would not have passed at any budget.
+    const BUDGET: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn a_server_that_accepts_and_then_says_nothing_still_lets_the_wallet_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind a local port");
+        let address = format!("http://{}", listener.local_addr().expect("read the bound port"));
+
+        // Accept and hold. Never write a byte — the wedged-server shape, as distinct from a refusal.
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+
+        let started = Instant::now();
+        let outcome = tokio::time::timeout(
+            BUDGET,
+            ServerConnection::connect(&address, Network::Signet),
+        )
+        .await;
+
+        let connect = outcome.unwrap_or_else(|_| {
+            panic!("connect never returned within {BUDGET:?} — it must bound itself, not rely on a caller")
+        });
+        assert!(connect.is_err(), "a server that never speaks is not a connection");
+        assert!(started.elapsed() < BUDGET, "took {:?}", started.elapsed());
+    }
+}

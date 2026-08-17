@@ -16,7 +16,7 @@
 # image (deploy/fly/captaind.Dockerfile) clones from this same remote.
 repo = "https://gitlab.com/ConorOkus/bark"
 branch = "fix/ldk-announce-address"
-sha = "f05e944d930d9484195c1bbac22f05c2900e6eb6"
+sha = "5cd1f2261bbf45d9ddb5860ff60327100a673d92"
 
 [rust-lightning]
 repo = "https://github.com/instagibbs/rust-lightning"

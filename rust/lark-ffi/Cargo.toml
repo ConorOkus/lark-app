@@ -41,3 +41,8 @@ zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 uniffi = { version = "0.28", features = ["bindgen-tests"] }
+# Reached directly only by the Ark-handshake regression test. bark already depends on it; naming
+# it here lets the contract suite hold the fork to a bounded connect, which is what stops a pin
+# bump from quietly restoring a wallet that never finishes opening. See ark_connect_timeout_tests.
+bark-server-rpc = { path = "../../../bark/server-rpc" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }

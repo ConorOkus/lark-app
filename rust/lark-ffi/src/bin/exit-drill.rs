@@ -122,9 +122,22 @@ async fn ensure_something_to_exit(
     wallet.onchain_sync().await.map_err(fail("could not sync the on-chain wallet"))?;
     let onchain = wallet.onchain_balance().await.map_err(fail("could not read on-chain funds"))?;
     if onchain.confirmed_sat == 0 {
+        // Name where to send, not just what is empty. "Fund it and re-run" is not actionable
+        // without an address, and there are two right answers: on-chain money the drill will
+        // board itself, or an Ark payment that skips boarding entirely. Both are printed because
+        // which one is available depends on what the operator has to hand — a faucet, or another
+        // wallet on the same stack.
+        let onchain_to = match wallet.deposit_address().await {
+            Ok(address) => format!("on-chain: {address}"),
+            Err(e) => format!("on-chain: unavailable ({e})"),
+        };
+        let ark_to = match wallet.mint_address().await {
+            Ok(address) => format!("ark: {address}"),
+            Err(e) => format!("ark: unavailable ({e})"),
+        };
         return Err(Outcome::Skip(format!(
             "nothing to exit: no VTXOs and no confirmed on-chain funds \
-             ({} sat pending). Fund {} and re-run.",
+             ({} sat pending) in {}.\n  Fund either and re-run —\n    {onchain_to}\n    {ark_to}",
             onchain.pending_sat, cfg.datadir,
         )));
     }
