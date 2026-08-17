@@ -385,12 +385,17 @@ class AppStateMachine constructor(
      * found would undo the exit; an app that boards only what the user asked for cannot.
      */
     fun goDeposit() {
-        push(Route.DEPOSIT)
         // Not while leaving. Arming here during an exit would board the exit's own proceeds back
         // into the wallet they were just pulled out of — the exact undo `startExit` disarms to
         // prevent, reintroduced by the one screen whose job is to arm.
-        if (state.exit.isExiting) return
-        funding?.armFunding(wallClockMillis())
+        val leaving = state.exit.isExiting
+        // Armed before the push, because the push is what renders. Both the balance and the
+        // deposit screen read the request to decide whether money is on its way, so arming after
+        // would draw the first frame — the one the holder is looking at — from a wallet nobody
+        // had asked yet.
+        if (!leaving) funding?.armFunding(wallClockMillis())
+        push(Route.DEPOSIT)
+        if (leaving) return
         startFundingWatcher()
     }
 
@@ -1092,14 +1097,33 @@ class AppStateMachine constructor(
         if (s.balanceVisible) MoneyFormat.btc(sats) else HIDDEN_BALANCE
 
     private fun renderBalance(s: MachineState): BalanceModel {
-        val sats = core.balanceSats.value
+        // The headline is everything the holder owns. `core.balanceSats` is the off-chain balance
+        // alone, and it stays that way — it is what the send path validates against, and widening
+        // it would let a keypad offer to spend coins Ark cannot reach. What changes is only what
+        // home *says*, because a wallet that has finished an exit owns its money on-chain and a
+        // screen reading ₿0 over it was the plainest possible falsehood.
+        val offchain = core.balanceSats.value
+        val onchain = funding?.confirmedSats ?: 0L
+        val sats = offchain + onchain
+        val arriving = renderArriving(s, masked = !s.balanceVisible)
         return BalanceModel(
             visible = s.balanceVisible,
             hideLabel = if (s.balanceVisible) "Hide" else "Show",
             primary = if (s.balanceVisible) primary(sats, s.denomination) else HIDDEN_BALANCE,
             secondary = if (s.balanceVisible) secondary(sats, s.denomination) else HIDDEN_BALANCE,
             unitLabel = if (s.denomination == Denomination.FIAT) "Dollars" else "Bitcoin (₿)",
-            arriving = renderArriving(s, masked = !s.balanceVisible),
+            arriving = arriving,
+            // Only when it distinguishes something. With nothing on-chain the total is the
+            // spendable balance and a split line would be noise on every ordinary wallet; with
+            // money arriving, that line already accounts for the same sats and says more.
+            split = if (onchain > 0L && s.balanceVisible && arriving == null) {
+                BalanceSplitModel(
+                    instant = primary(offchain, s.denomination),
+                    onchain = primary(onchain, s.denomination),
+                )
+            } else {
+                null
+            },
         )
     }
 
@@ -1112,7 +1136,13 @@ class AppStateMachine constructor(
      */
     private fun renderArriving(s: MachineState, masked: Boolean): ArrivingModel? {
         val funding = funding
-        if (funding == null || funding.onchainSats == 0L) return null
+        // The armed check is what keeps this to money the app is actually going to act on. Nothing
+        // boards an unasked-for balance — exit proceeds least of all — so promising it "in a few
+        // minutes" was a wait that would never end. Unasked-for on-chain money is not arriving
+        // anywhere; it has arrived, and the balance's split line is what names it.
+        if (funding == null || funding.onchainSats == 0L || funding.fundingArmedAtMillis == null) {
+            return null
+        }
         val arriving = funding.onchainSats
         // Only definite when nothing is still confirming: pending funds may yet carry the total
         // over the minimum, and calling that a shortfall would send the user to top up for nothing.

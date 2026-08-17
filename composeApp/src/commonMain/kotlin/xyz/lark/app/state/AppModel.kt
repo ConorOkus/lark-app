@@ -23,6 +23,28 @@ data class BalanceModel(
     val unitLabel: String,
     /** Money on its way, or null when nothing is. See [ArrivingModel]. */
     val arriving: ArrivingModel?,
+    /**
+     * How the balance divides between instantly spendable and on-chain, or null when there is
+     * nothing on-chain to divide.
+     *
+     * Present only when it says something. A wallet with no on-chain reserve is the ordinary case
+     * and looks exactly as it always has; the line appears when the total stops being the whole
+     * story — after an exit, or while a deposit sits unboarded.
+     */
+    val split: BalanceSplitModel? = null,
+)
+
+/**
+ * The two halves of a balance that is not uniformly spendable.
+ *
+ * Exists because the headline is what the holder owns, and that is not the same as what Pay can
+ * send this second. Without this line a wallet that has just exited shows a large number over a
+ * Pay button that refuses most of it — and, before it existed, showed ₿0 over funds the holder
+ * plainly had. Both are lies; only one of them looks like one.
+ */
+data class BalanceSplitModel(
+    val instant: String,
+    val onchain: String,
 )
 
 /**

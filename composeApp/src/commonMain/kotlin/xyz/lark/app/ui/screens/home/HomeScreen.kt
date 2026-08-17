@@ -25,6 +25,7 @@ import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.ArrivingModel
 import xyz.lark.app.state.BalanceModel
+import xyz.lark.app.state.BalanceSplitModel
 import xyz.lark.app.state.HealthModel
 import xyz.lark.app.state.Route
 import xyz.lark.app.ui.components.HealthDot
@@ -44,6 +45,7 @@ private val HealthDotSize = 7.dp
 private val SecondaryGap = 12.dp
 private val HideRowGap = 18.dp
 private val ArrivingTopGap = 16.dp
+private val SplitTopGap = 10.dp
 private val ArrivingNoteGap = 2.dp
 private val HideRowHeight = 44.dp
 
@@ -168,10 +170,29 @@ private fun BalanceBlock(
         horizontalAlignment = Alignment.Start,
     ) {
         BalanceAmounts(balance = balance, onToggleUnit = onToggleUnit)
+        BalanceSplitLine(split = balance.split)
         ArrivingLine(arriving = balance.arriving)
         Spacer(modifier = Modifier.height(HideRowGap))
         HideShowRow(label = balance.hideLabel, onClick = onToggleBalance)
     }
+}
+
+/**
+ * What the headline is made of, when it is made of two different things.
+ *
+ * Absent for an ordinary wallet, which is most of them. It appears once money is sitting on-chain
+ * — after an exit, or while a deposit waits — because the headline then covers funds that Pay
+ * cannot send this second, and a holder is owed that before they try.
+ */
+@Composable
+private fun BalanceSplitLine(split: BalanceSplitModel?) {
+    if (split == null) return
+    Spacer(modifier = Modifier.height(SplitTopGap))
+    Text(
+        text = "${split.instant} instant · ${split.onchain} on-chain",
+        style = LarkTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 18.sp),
+        color = LarkColors.TextTertiary,
+    )
 }
 
 /**
