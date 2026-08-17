@@ -315,7 +315,17 @@ data class DepositModel(
     val address: String,
     /** "Copy" / "Copied", sharing the receive screen's 1.6s flip. */
     val copyLabel: String,
-    val minLabel: String,
+    /**
+     * What this deposit is for, in the screen's own words.
+     *
+     * Composed here rather than in the screen because it depends on why the holder arrived. The
+     * same address means two different things: ordinarily it is money on its way to being
+     * spendable, but during an exit it pays that exit's miner fees and is deliberately *not* made
+     * spendable — the funding intent stays down so the exit's own proceeds cannot be swept back
+     * into the Ark. Quoting the board minimum in that second case would name a threshold that has
+     * nothing to do with what the money is for.
+     */
+    val explainer: String,
     /** Money on its way, or null when nothing has arrived yet. */
     val arriving: ArrivingModel?,
 )

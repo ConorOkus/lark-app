@@ -1,5 +1,6 @@
 package xyz.lark.app.state
 
+import xyz.lark.app.core.format.MoneyFormat
 import xyz.lark.app.core.gateway.SendInput
 
 /**
@@ -25,4 +26,23 @@ internal fun sendSummary(
     input.isOnchain -> "A bitcoin address. This goes on-chain \u2014 slower, and it pays a miner fee."
     invoiceAmount != null -> "Invoice for $invoiceAmount."
     else -> "Ready to pay ${input.display}."
+}
+
+/**
+ * What the deposit screen says this money is for.
+ *
+ * Two genuinely different answers behind one address. Ordinarily a deposit is on its way to being
+ * spendable, and the board minimum is the number that matters — under it, the wait will not end.
+ *
+ * During an exit it is neither. The funds pay the exit's miner fees, and the funding intent is
+ * deliberately held down so they are not boarded: sweeping them into the Ark is the undo the exit
+ * exists to prevent, and it would take the fees with it. The board minimum is not the threshold
+ * either — what matters is the exit's own cost, which the engine will not tell us. So this says no
+ * number at all rather than the wrong one, which is the same rule the exit screen's fee row follows.
+ */
+internal fun depositExplainer(exiting: Boolean, minBoardSats: Long): String = if (exiting) {
+    "This pays the miner fees your exit needs to finish. It stays on-chain — LARK will not move " +
+        "it into your spendable balance while you are leaving."
+} else {
+    "Send at least ${MoneyFormat.btc(minBoardSats)}. It takes a few minutes before you can spend it."
 }

@@ -1230,7 +1230,7 @@ class AppStateMachine constructor(
         return DepositModel(
             address = core.depositAddress,
             copyLabel = if (s.copied) "Copied" else "Copy",
-            minLabel = MoneyFormat.btc(funding.minBoardSats),
+            explainer = depositExplainer(exiting = s.exit.isExiting, minBoardSats = funding.minBoardSats),
             // Never masked, following the exit screen's precedent: a screen whose whole job is to
             // report what arrived should not hide it because the home balance is hidden.
             arriving = renderArriving(s, masked = false),
