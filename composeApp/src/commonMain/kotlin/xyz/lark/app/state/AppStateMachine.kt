@@ -823,18 +823,28 @@ class AppStateMachine constructor(
      * deposit that has not been made yet.
      */
     private fun startFundingWatcher() {
-        if (funding == null) return
+        val funding = funding ?: return
         fundingWatcherJob?.cancel()
         fundingWatcherJob = scope.launch {
             while (true) {
-                if (!fundingArmed) {
+                if (fundingArmed) {
+                    pollFundingOnce()
+                } else {
+                    // Reading is not consent, so the sync is not gated on the request the way
+                    // boarding is. What the holder owns has to be known whether or not they asked
+                    // for a deposit: a wallet that has finished an exit holds its money on-chain
+                    // with nothing armed, and home cannot report a balance it never looks at.
+                    // Gating the read as well is what made that wallet show ₿0 over its own funds.
+                    funding.syncOnchain()
                     // Erase rather than merely stop. A lapsed request left on disk would spring
                     // back to life the next time any money appeared on-chain — including funds
-                    // from an exit — because the balance clause above would re-qualify it.
-                    funding.disarmFunding()
-                    return@launch
+                    // from an exit — because the balance clause in `fundingArmed` would re-qualify
+                    // it. Nothing here boards: this branch is precisely the unasked-for case.
+                    if (funding.fundingArmedAtMillis != null) funding.disarmFunding()
+                    // The sync moved numbers the balance is rendered from; nothing else will
+                    // re-render, because no state field changed.
+                    update { it }
                 }
-                pollFundingOnce()
                 delay(if (funding.onchainSats > 0) FUNDING_POLL_ACTIVE_MILLIS else FUNDING_POLL_IDLE_MILLIS)
             }
         }

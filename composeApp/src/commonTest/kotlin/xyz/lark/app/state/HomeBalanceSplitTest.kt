@@ -2,6 +2,7 @@ package xyz.lark.app.state
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import xyz.lark.app.core.FakeLarkCore
@@ -17,6 +18,9 @@ private const val MIN_BOARD = 10_000L
 
 /** The demo wallet's off-chain balance, mirrored so the arithmetic below is legible. */
 private const val OFFCHAIN = 412_350L
+
+/** The watcher's idle cadence, mirrored from the machine. */
+private const val FUNDING_IDLE_TICK_MILLIS = 120_000L
 
 /** What the mutinynet exit actually landed. Enough to be worth naming; not a round number. */
 private const val ONCHAIN = 119_350L
@@ -53,6 +57,32 @@ private fun TestScope.machine(
 )
 
 private fun AppStateMachine.type(digits: String) = digits.forEach { keyPress(it) }
+
+/**
+ * On-chain funds that are only knowable by looking.
+ *
+ * The real capability reads a BDK wallet, so [confirmedSats] means "as of the last sync" — a value
+ * that stays zero until something asks the chain. A fake that reports the balance without being
+ * synced cannot fail the test below, which is the test that matters: the watcher used to return
+ * before its first sync whenever no deposit had been requested.
+ */
+private class SyncedFunding(private val onSync: Long) : OnchainFunding {
+    var syncs = 0
+        private set
+    private var seen = 0L
+
+    override val confirmedSats: Long get() = seen
+    override val pendingSats: Long = 0L
+    override val minBoardSats: Long = MIN_BOARD
+    override val fundingArmedAtMillis: Long? = null
+    override fun armFunding(atMillis: Long) = Unit
+    override fun disarmFunding() = Unit
+    override suspend fun syncOnchain() {
+        syncs++
+        seen = onSync
+    }
+    override suspend fun boardAll(): Boolean = false
+}
 
 /**
  * What home says a wallet is worth.
@@ -119,6 +149,43 @@ class HomeBalanceSplitTest {
         runCurrent()
         m.toggleBalance()
         assertNull(m.model.value.balance.split)
+    }
+
+    /**
+     * The case that made the split line a lie of its own.
+     *
+     * `confirmedSats` is only as good as the last sync, and the only thing that ever synced was the
+     * deposit watcher — which returned immediately unless the holder had asked for money. So the
+     * one wallet this line exists for, having exited with nothing armed, was also the one wallet
+     * whose on-chain balance was never read: home showed ₿0 over its own funds, and the split line
+     * shipped in this branch could not have appeared either.
+     *
+     * Boarding stays gated on the request. Reading is not consent.
+     */
+    @Test
+    fun money_nobody_asked_for_is_still_looked_at() = runTest {
+        val funding = SyncedFunding(onSync = ONCHAIN)
+        val m = machine(funding)
+        runCurrent()
+
+        assertTrue(funding.syncs > 0, "an unasked-for balance still has to be read")
+        assertEquals("₿531,700", m.model.value.balance.primary)
+        assertNotNull(m.model.value.balance.split, "and reported once it is known")
+    }
+
+    /** And it keeps looking: money can arrive at any time, request or no request. */
+    @Test
+    fun it_keeps_looking_rather_than_reading_once() = runTest {
+        val funding = SyncedFunding(onSync = ONCHAIN)
+        val m = machine(funding)
+        runCurrent()
+        val first = funding.syncs
+
+        advanceTimeBy(FUNDING_IDLE_TICK_MILLIS + 1)
+        runCurrent()
+
+        assertTrue(funding.syncs > first, "the watcher stopped after its first look")
+        assertNotNull(m.model.value.balance.split)
     }
 
     /**
