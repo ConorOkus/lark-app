@@ -113,6 +113,18 @@ async fn ensure_something_to_exit(
     cfg: &Config,
     started: Instant,
 ) -> Result<(), Outcome> {
+    // An exit already in flight is the answer to "is there anything to exit?", and it has to be
+    // asked first. A VTXO that is exiting has left the spendable balance, so by the time this runs
+    // the wallet reads as empty off-chain — and the on-chain funds it would then reach for are the
+    // exit's own fee reserve. Boarding those is the precise undo the app disarms funding to
+    // prevent: it needs the Ark server, so it fails outright on the run that matters, and would
+    // pull the exit's CPFP money back into the Ark it is leaving on the run that does not.
+    let exit = wallet.exit_status().await.map_err(fail("could not read exit status"))?;
+    if exit.stage != ExitStage::None {
+        log(started, 0, &format!("an exit is already under way at {:?} — nothing to arrange", exit.stage));
+        return Ok(());
+    }
+
     // Sync before reading, because the balance read is local. A VTXO paid in out of round arrives
     // through the mailbox and is invisible until maintenance collects it, so without this a wallet
     // funded by an Ark payment reads as empty and the drill skips with money sitting in it.
