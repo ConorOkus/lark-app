@@ -124,11 +124,12 @@ pub async fn open_wallet(
     config.esplora_address = Some(esplora);
     config.lightning_enabled = true;
 
-    let onchain = OnchainWallet::load_or_create(network, seed64, db.clone())
+    let mut onchain = OnchainWallet::load_or_create(network, seed64, db.clone())
         .await
         .map_err(LarkError::from)?;
 
-    let wallet = if db.read_properties().await.map_err(LarkError::from)?.is_some() {
+    let existing = db.read_properties().await.map_err(LarkError::from)?.is_some();
+    let wallet = if existing {
         // `open_with_onchain`, not `open`: only the onchain-aware variant calls
         // `exit.load()`, and without it a unilateral exit that is still in flight is
         // invisible after the process restarts — the wallet would report no exit and
@@ -141,6 +142,25 @@ pub async fn open_wallet(
             .await
             .map_err(LarkError::from)?
     };
+
+    if !existing {
+        // A wallet with no database behind it is either brand new or a restore, and nothing in the
+        // twelve words says which. The ordinary `sync` cannot tell them apart either: it scans
+        // scripts the wallet has already revealed, and a fresh database has revealed none — so a
+        // restored wallet finds nothing, and keeps finding nothing on every later pass.
+        //
+        // That is the whole promise of this feature failing at the last step. A holder who exits to
+        // on-chain, loses the device, and types their words back in would see an empty wallet with
+        // their money sitting in it: 89,870 sat, in the exact case this branch was written for.
+        // The full scan happens once, here, because this is the only moment it is needed.
+        //
+        // Fatal rather than best-effort: creating a wallet already requires the chain source, and
+        // "restored, but silently missing your on-chain balance" is the one outcome worth refusing.
+        onchain
+            .initial_wallet_scan(&wallet.chain, None)
+            .await
+            .map_err(LarkError::from)?;
+    }
 
     // `Wallet::fingerprint()` is the public accessor (WalletSeed::new is private).
     let fingerprint = wallet.fingerprint().to_string().into_bytes();
