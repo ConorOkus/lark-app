@@ -393,6 +393,19 @@ impl LarkWallet {
     /// ordinary progress.
     pub async fn progress_exit(&self) -> Result<ExitStatusInfo, LarkError> {
         let mut onchain = self.onchain.lock().await;
+        // Bring the on-chain wallet's own UTXO set up to date first, using the guard already held —
+        // calling `onchain_sync` here would re-enter this lock and deadlock.
+        //
+        // `sync_no_progress` below refreshes the exit transaction manager's view of the chain, not
+        // this wallet's coins, and the two are different questions. Exit transactions are zero-fee
+        // and paid for by a CPFP child spending these coins, so a pass that cannot see money that
+        // has arrived reports `Insufficient Confirmed Funds` over a funded wallet.
+        //
+        // That matters because of who is watching: a fee-starved exit tells its holder to add
+        // money, and starting an exit stands the funding watcher down — so nothing else was left
+        // running to notice them doing it. Without this the app asks for a deposit it can never
+        // see, and the stall outlives the fix for it until the process restarts.
+        onchain.sync(&self.inner.chain).await.map_err(LarkError::from)?;
         // Write guard on `exit` while `&self.inner` is passed alongside it: this is bark's own
         // idiom (`Wallet::sync_exits`), so `progress_exits` does not re-enter the lock.
         let mut exit = self.inner.exit.write().await;
