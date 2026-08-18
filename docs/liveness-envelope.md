@@ -56,14 +56,19 @@ background refresh, not a bigger number.
   open an app, which is the weakest possible mechanism. `BGTaskScheduler` would shorten the exposure
   but cannot be relied on — iOS grants background time at its discretion — so a long lifetime stays
   necessary either way.
-- **Unilateral exit** (#19) exists and has been run end to end, but not yet without a server.
-  Settings → Advanced starts it, the wallet drives it to `Claimed` on its own, and the proceeds land
-  in the on-chain wallet — verified on mutinynet: three exit transactions with CPFP children, then a
-  claim spending all three into a BDK address. What has *not* been proven is the case the feature
-  exists for. Every run so far had captaind reachable; the drill skips when it is not, because
-  `lark-captaind` has 3535 closed. So the server's continued operation is still part of the
-  envelope in practice — the fallback is written and tested, just never yet exercised against the
-  failure it is for.
+- **Unilateral exit** (#19) is no longer part of this list, and the run that moved it is worth
+  recording. On 2026-08-17 the drill walked a 90,000 sat VTXO from `Processing` to `Claimed` in
+  79m56s with `lark-captaind` scaled to zero — claim `abddf2bd…` at block 3352883, 89,870 sat
+  landed on-chain, 130 sat fee. So the server's continued operation is no longer part of the
+  envelope: a holder can leave without it, demonstrated rather than asserted.
+
+  Three things had to be fixed before that run could pass, and none of them were visible from a
+  green test suite. The Ark connect had no bound, so a server that accepted the connection and then
+  said nothing — which is what Fly's edge does with the machine scaled to zero — hung the wallet
+  open forever, and a wallet that cannot open cannot reach the exit. `progress_exit` never synced
+  the on-chain wallet, so a fee-starved exit could not see the deposit it had just asked for.
+  And the drill itself reached for the exit's own CPFP reserve when a resumed exit made the
+  off-chain balance read zero.
 - **The deadline is visible but passive.** Settings → Advanced now shows the VTXO count and the
   soonest expiry as a real countdown (`block 3,377,744 · in 20 days`), computed at the network's
   actual block spacing — so a user *can* see their own deadline, but only if they go looking. The
