@@ -16,8 +16,9 @@ import xyz.lark.app.ui.components.GoldPillButton
 import xyz.lark.app.ui.components.OutlinePillButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
+import xyz.lark.app.ui.theme.belowStatusBar
 
-private val WelcomeTopPadding = 88.dp
+private val WelcomeTopPadding = 88.dp.belowStatusBar()
 private val HeroGap = 16.dp
 private val ButtonGap = 12.dp
 private val SubCopyMaxWidth = 290.dp

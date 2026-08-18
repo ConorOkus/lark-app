@@ -37,6 +37,9 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: lark
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # The app is dark-only, and the status bar now sits on its background: in a light
+        # appearance the clock renders black-on-#0B0C0E, i.e. invisible.
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Signing. The team is Conor's individual Apple Developer team; automatic signing lets
         # Xcode fetch or create the distribution certificate and provisioning profile at archive
