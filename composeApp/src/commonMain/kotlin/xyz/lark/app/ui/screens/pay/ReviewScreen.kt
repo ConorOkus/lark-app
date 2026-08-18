@@ -67,9 +67,21 @@ fun ReviewScreen(
         ) {
             AmountBlock(keypad = keypad, recipientName = send.recipientName)
             SurfaceCard(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(0.dp)) {
-                KeyValueRow(label = "Arrives", value = "Instantly")
-                RowGroupDivider()
-                KeyValueRow(label = "Fee", value = "None")
+                val onchain = send.onchainRoute
+                if (onchain == null) {
+                    KeyValueRow(label = "Arrives", value = "Instantly")
+                    RowGroupDivider()
+                    KeyValueRow(label = "Fee", value = "None")
+                } else {
+                    // An on-chain spend is a different promise from the one this card usually
+                    // makes: not instant, not free, and not recallable. Saying so here is the
+                    // last point before it is out of the holder's hands.
+                    KeyValueRow(label = "Arrives", value = "On-chain, in about an hour")
+                    RowGroupDivider()
+                    KeyValueRow(label = "Miner fee", value = onchain.fee)
+                    RowGroupDivider()
+                    KeyValueRow(label = "Leaves your wallet", value = onchain.total)
+                }
             }
         }
         PayCta(text = "Pay ${keypad.amountDisplay}", onClick = onConfirm)

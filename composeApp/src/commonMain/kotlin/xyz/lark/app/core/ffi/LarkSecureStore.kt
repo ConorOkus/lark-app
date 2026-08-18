@@ -51,4 +51,31 @@ interface LarkSecureStore {
 
     /** Persist the funding intent, or clear it when [millis] is null. */
     fun storeFundingArmedAt(millis: Long?)
+
+    /**
+     * When the current or last unilateral exit began and finished, or null if none has begun.
+     *
+     * A fourth device-local fact, for the funding intent's reason: bark records the exit's states,
+     * but neither the moment the holder asked for one nor whether they were ever told it finished.
+     * Without this the receipt is shown again on every launch, or — if it were session-only — lost
+     * entirely when the app is killed between the last claim and the holder next opening it, which
+     * on a multi-hour exit is the likely case rather than the unlucky one.
+     */
+    fun loadExitTimes(): ExitTimes?
+
+    /** Persist the exit's timings, or clear them when [times] is null. */
+    fun storeExitTimes(times: ExitTimes?)
 }
+
+/**
+ * When an exit began, and when it finished if it has.
+ *
+ * One value rather than two stored facts because they describe one exit and only ever change
+ * together — and because a start with no matching finish is meaningful (an exit in flight) while a
+ * finish with no start is not. [completedAt] being non-null means "finished, and the holder has
+ * not dismissed the receipt yet"; the whole value is cleared when they do.
+ */
+data class ExitTimes(
+    val startedAt: Long,
+    val completedAt: Long? = null,
+)

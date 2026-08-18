@@ -9,6 +9,22 @@ import xyz.lark.app.core.format.displayName
  * knowledge of "what counts as a payable destination" stays in one place: the send path and the
  * input screen must agree, or the screen would offer Continue on something the core then refuses.
  */
+/**
+ * Which money system a destination belongs to.
+ *
+ * The distinction is not cosmetic: the two are paid by different calls, out of different balances,
+ * and one of them is slow and irreversible. Before this existed, an on-chain address matched the
+ * same bech32 shape as an Ark address, was offered as payable, and failed deep in the Ark send
+ * path — so classification is what closes that hole rather than routing around it.
+ */
+internal enum class SendKind {
+    /** Ark addresses, BOLT11 invoices, BOLT12 offers, lightning addresses, LNURL. */
+    OFF_CHAIN,
+
+    /** A bitcoin address: paid from the on-chain balance, at miner-fee speed. */
+    ON_CHAIN,
+}
+
 internal data class SendInput(
     /** What would actually be paid, or null when nothing payable was recognized. */
     val destination: String?,
@@ -19,8 +35,12 @@ internal data class SendInput(
     val amountSat: Long?,
     /** Short human-facing rendering — a lightning address as-is, a long invoice as head…tail. */
     val display: String,
+    /** Which system pays it. Meaningless when [destination] is null. */
+    val kind: SendKind = SendKind.OFF_CHAIN,
 ) {
     val isResolved: Boolean get() = destination != null
+
+    val isOnchain: Boolean get() = isResolved && kind == SendKind.ON_CHAIN
 }
 
 /**
@@ -42,8 +62,28 @@ internal fun classifySendInput(raw: String): SendInput {
         destination = candidate,
         amountSat = amountSat,
         display = displayName(candidate ?: trimmed),
+        kind = if (candidate != null && isOnchainAddress(candidate)) {
+            SendKind.ON_CHAIN
+        } else {
+            SendKind.OFF_CHAIN
+        },
     )
 }
+
+/**
+ * Whether this bech32 string is a bitcoin address rather than an Ark one.
+ *
+ * Told apart by the human-readable part, which is the only thing that distinguishes them: both are
+ * bech32 and both would otherwise satisfy the same shape check. Bitcoin uses `bc`/`tb`/`bcrt`;
+ * Ark uses `ark`/`tark`. Matching on the prefix rather than a full decode keeps this at the same
+ * shape level as everything else here — the screen only needs to route, and the core still
+ * network-checks the address before a single sat moves.
+ *
+ * Note `tb` and `tark` are both testnet forms and both begin with `t`: the separator matters, and
+ * a looser prefix test would classify every Ark testnet address as on-chain.
+ */
+private fun isOnchainAddress(destination: String): Boolean =
+    BITCOIN_ADDRESS_HRP.matches(destination.lowercase())
 
 /**
  * Whether this looks like something the wallet could pay.
@@ -61,3 +101,11 @@ private fun isPayableDestination(destination: String): Boolean =
 
 private val LIGHTNING_ADDRESS = Regex("""[^@\s]+@[^@\s]+\.[^@\s]+""")
 private val LNURL = Regex("""(?i)lnurl[0-9a-z]+""")
+
+/**
+ * Bitcoin's bech32 prefixes, anchored on the `1` separator.
+ *
+ * `bcrt` before `bc` is not alphabetical fussiness — regtest addresses start with `bc`, so an
+ * unanchored alternation would match `bc` and leave `rt1…` as data.
+ */
+private val BITCOIN_ADDRESS_HRP = Regex("""(bcrt|bc|tb)1[0-9a-z]+""")

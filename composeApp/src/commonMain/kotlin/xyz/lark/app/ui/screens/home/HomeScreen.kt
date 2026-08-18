@@ -25,6 +25,7 @@ import xyz.lark.app.state.AppModel
 import xyz.lark.app.state.AppStateMachine
 import xyz.lark.app.state.ArrivingModel
 import xyz.lark.app.state.BalanceModel
+import xyz.lark.app.state.BalanceSplitModel
 import xyz.lark.app.state.HealthModel
 import xyz.lark.app.state.Route
 import xyz.lark.app.ui.components.HealthDot
@@ -44,6 +45,7 @@ private val HealthDotSize = 7.dp
 private val SecondaryGap = 12.dp
 private val HideRowGap = 18.dp
 private val ArrivingTopGap = 16.dp
+private val SplitTopGap = 10.dp
 private val ArrivingNoteGap = 2.dp
 private val HideRowHeight = 44.dp
 
@@ -65,24 +67,38 @@ fun HomeScreen(
 ) {
     Column(modifier = modifier.fillMaxSize().padding(top = HomeTopPadding)) {
         HomeTopRow(health = model.health, onOpenHealth = { machine.push(Route.HEALTH) })
-        BalanceBlock(
-            balance = model.balance,
-            onToggleUnit = machine::toggleUnit,
-            onToggleBalance = machine::toggleBalance,
-            modifier = Modifier.weight(1f),
-        )
-        val banner = model.health.banner
-        if (banner != null) {
-            AttentionBanner(
-                banner = banner,
-                offline = model.health.offline,
-                onClick = { machine.push(Route.HEALTH) },
+        val exiting = model.exiting
+        if (exiting != null) {
+            // A wallet that is leaving has no spendable balance and no available actions, so the
+            // exit takes the whole middle rather than being announced above a balance that cannot
+            // be spent and tiles that cannot be pressed.
+            ExitingSurface(
+                exiting = exiting,
+                // The deposit screen, which refuses to arm funding while exiting — so the
+                // funds land on-chain to pay exit fees and are never boarded back in.
+                onStallAction = machine::goDeposit,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            BalanceBlock(
+                balance = model.balance,
+                onToggleUnit = machine::toggleUnit,
+                onToggleBalance = machine::toggleBalance,
+                modifier = Modifier.weight(1f),
+            )
+            val banner = model.health.banner
+            if (banner != null) {
+                AttentionBanner(
+                    banner = banner,
+                    offline = model.health.offline,
+                    onClick = { machine.push(Route.HEALTH) },
+                )
+            }
+            ActionTiles(
+                onPay = { machine.push(Route.SEND_INPUT) },
+                onGetPaid = { machine.go(Route.RECEIVE) },
             )
         }
-        ActionTiles(
-            onPay = { machine.push(Route.SEND_INPUT) },
-            onGetPaid = { machine.go(Route.RECEIVE) },
-        )
         LarkTabBar(current = Route.HOME, machine = machine)
     }
 }
@@ -154,10 +170,29 @@ private fun BalanceBlock(
         horizontalAlignment = Alignment.Start,
     ) {
         BalanceAmounts(balance = balance, onToggleUnit = onToggleUnit)
+        BalanceSplitLine(split = balance.split)
         ArrivingLine(arriving = balance.arriving)
         Spacer(modifier = Modifier.height(HideRowGap))
         HideShowRow(label = balance.hideLabel, onClick = onToggleBalance)
     }
+}
+
+/**
+ * What the headline is made of, when it is made of two different things.
+ *
+ * Absent for an ordinary wallet, which is most of them. It appears once money is sitting on-chain
+ * — after an exit, or while a deposit waits — because the headline then covers funds that Pay
+ * cannot send this second, and a holder is owed that before they try.
+ */
+@Composable
+private fun BalanceSplitLine(split: BalanceSplitModel?) {
+    if (split == null) return
+    Spacer(modifier = Modifier.height(SplitTopGap))
+    Text(
+        text = "${split.instant} instant · ${split.onchain} on-chain",
+        style = LarkTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 18.sp),
+        color = LarkColors.TextTertiary,
+    )
 }
 
 /**

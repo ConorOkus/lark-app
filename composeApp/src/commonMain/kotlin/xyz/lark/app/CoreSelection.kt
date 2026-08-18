@@ -8,6 +8,8 @@ import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
+import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.ffi.FfiCoreProvider
 import xyz.lark.app.core.gateway.BarkdApi
 import xyz.lark.app.core.gateway.BarkdApiVariant
@@ -24,6 +26,8 @@ internal data class CoreSelection(
     val core: LarkCore,
     val demo: DemoControls?,
     val funding: OnchainFunding? = null,
+    val walletExit: WalletExit? = null,
+    val onchainSend: OnchainSend? = null,
 )
 
 /**
@@ -58,9 +62,16 @@ internal fun buildCore(
             "Android cannot yet (its FfiLarkCore is blocked — see docs/ffi/kotlin-bindings-status.md), " +
             "so run the Android app with CoreConfig.mode = DEMO or GATEWAY."
     }(scope).let { core ->
-        // Boarding is a capability, not a mode: asking the core itself keeps this branch honest if a
-        // future in-process core arrives without an on-chain wallet.
-        CoreSelection(core = core, demo = null, funding = core as? OnchainFunding)
+        // Boarding and exiting are capabilities, not modes: asking the core itself keeps this
+        // branch honest if a future in-process core arrives without an on-chain wallet, and stops
+        // the exit screen promising a permissionless exit a core cannot actually perform.
+        CoreSelection(
+            core = core,
+            demo = null,
+            funding = core as? OnchainFunding,
+            walletExit = core as? WalletExit,
+            onchainSend = core as? OnchainSend,
+        )
     }
     CoreMode.GATEWAY -> {
         // The fork constants move together (see CoreConfig's fork-mode block): fail fast on a

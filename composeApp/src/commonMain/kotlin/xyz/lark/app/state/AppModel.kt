@@ -23,6 +23,28 @@ data class BalanceModel(
     val unitLabel: String,
     /** Money on its way, or null when nothing is. See [ArrivingModel]. */
     val arriving: ArrivingModel?,
+    /**
+     * How the balance divides between instantly spendable and on-chain, or null when there is
+     * nothing on-chain to divide.
+     *
+     * Present only when it says something. A wallet with no on-chain reserve is the ordinary case
+     * and looks exactly as it always has; the line appears when the total stops being the whole
+     * story — after an exit, or while a deposit sits unboarded.
+     */
+    val split: BalanceSplitModel? = null,
+)
+
+/**
+ * The two halves of a balance that is not uniformly spendable.
+ *
+ * Exists because the headline is what the holder owns, and that is not the same as what Pay can
+ * send this second. Without this line a wallet that has just exited shows a large number over a
+ * Pay button that refuses most of it — and, before it existed, showed ₿0 over funds the holder
+ * plainly had. Both are lies; only one of them looks like one.
+ */
+data class BalanceSplitModel(
+    val instant: String,
+    val onchain: String,
 )
 
 /**
@@ -82,6 +104,26 @@ data class SendModel(
     val inputSummary: String = "",
     /** The destination carries its own amount, so the keypad is skipped and cannot override it. */
     val fixedAmount: Boolean = false,
+    /**
+     * The on-chain route line for review, or null when this is an ordinary off-chain send.
+     *
+     * Present only for a bitcoin address, because that is the only case where the holder is about
+     * to do something materially different from what Pay usually does: slower, irreversible, and
+     * out of a different balance. An ordinary Ark or Lightning send says nothing extra.
+     */
+    val onchainRoute: OnchainRouteModel? = null,
+)
+
+/**
+ * What review says about a spend that is leaving on-chain.
+ *
+ * [fee] is an em-dash until the quote lands, and stays one if it cannot be produced. That is the
+ * honest reading: R12 requires the fee be named before the holder confirms, and a figure invented
+ * to fill the row would be attached to the one action in this flow that cannot be taken back.
+ */
+data class OnchainRouteModel(
+    val fee: String,
+    val total: String,
 )
 
 /** One pre-formatted activity row; [amount] is signed in the current denomination. */
@@ -176,6 +218,7 @@ data class AppModel(
     val denomination: Denomination,
     val balance: BalanceModel,
     val exitAmount: String,
+    val exitEstimates: ExitEstimatesModel,
     val health: HealthModel,
     val keypad: KeypadModel,
     val send: SendModel,
@@ -193,6 +236,94 @@ data class AppModel(
     val restore: RestoreModel,
     /** On-chain deposit state; null when the active core cannot board (demo, gateway). */
     val deposit: DepositModel?,
+    /**
+     * The unilateral exit in flight, or null when the wallet is not exiting.
+     *
+     * Non-null is the whole signal: a wallet that is leaving the Ark cannot send, receive, or
+     * board, so every surface that offers those reads this first. It is not a route — the exit
+     * outlives any screen, and making it one would let the user navigate away from a state they
+     * are still in.
+     */
+    val exiting: ExitingModel?,
+    /**
+     * The finished exit's receipt, or null when there is none to show.
+     *
+     * Separate from [exiting] and never non-null at the same time: one says the wallet is leaving,
+     * the other that it has left.
+     */
+    val exitDone: ExitDoneModel?,
+)
+
+/**
+ * A finished exit, once.
+ *
+ * Deliberately reads as a result rather than a warning. The funds are on-chain under the holder's
+ * own keys at this point, so there is nothing outstanding and nothing to be careful about — the
+ * screen's job is to say the thing LARK claims actually happened, and then get out of the way.
+ *
+ * [minerFee] is an em-dash for now: the engine's claimed state records a txid and a block and no
+ * amount, so what the exit actually cost is not recoverable without reading the chain back.
+ */
+data class ExitDoneModel(
+    val landed: String,
+    val minerFee: String,
+    val took: String,
+)
+
+/**
+ * The two figures on the exit screen that the app has to work out rather than simply know.
+ *
+ * Grouped because they share the property the amount does not: either can honestly be unknown, and
+ * both arrive as an em-dash when they are. This is the screen that used to state `~$1.80` and
+ * `about 24 hours` as literals, so the type exists partly to make "we might not know this" the
+ * shape of the data rather than a convention someone has to remember.
+ *
+ * [minerFee] is unknown today for everyone: bark keeps its exit-cost estimate crate-private, so
+ * nothing above the engine can price an exit. [readyIn] is unknown whenever the Ark server is
+ * unreachable, because the exit delta lives there and is not persisted — which is exactly the
+ * wallet most likely to be reading this screen.
+ */
+data class ExitEstimatesModel(
+    val minerFee: String,
+    val readyIn: String,
+)
+
+/**
+ * A unilateral exit in progress, as the home screen shows it.
+ *
+ * [claimedOf] and [inFlight] are separate because they answer different questions — how much of
+ * the wallet is out, and how much is still in the air — and a user watching a multi-hour exit
+ * wants both.
+ *
+ * [stalled] does not offer a way out, because there is not one. It says the exit is not advancing
+ * and the wallet keeps trying, which is the truth; a control here would imply otherwise.
+ */
+data class ExitingModel(
+    /**
+     * The largest thing on the surface: a countdown where one is derivable, the state's own name
+     * everywhere else.
+     *
+     * Only the wait between the exit confirming and its funds becoming claimable can be computed,
+     * because only that one is bounded by a known height. Before it, the remaining time depends on
+     * how long confirmation takes; after it, on how long claiming takes. Neither is knowable, so
+     * neither gets a number — the alternative is a countdown that is simply wrong for hours.
+     */
+    val headline: String,
+    val detail: String,
+    val inFlight: String,
+    val landed: String,
+    val claimedOf: String,
+    val stalled: Boolean,
+    /**
+     * The label for the one action a stalled exit can offer, or null when there is nothing to
+     * offer — which is every other stall and every advancing exit.
+     *
+     * Null is the default and the honest one. A stall the holder cannot clear must not come with a
+     * button, because a control that cannot work is worse than none: it converts "wait" into
+     * "you did something wrong". Only a funding shortfall gets one, and taking it does not leave
+     * exiting mode — there is still no cancel.
+     */
+    val stallAction: String? = null,
 )
 
 /**
@@ -206,7 +337,17 @@ data class DepositModel(
     val address: String,
     /** "Copy" / "Copied", sharing the receive screen's 1.6s flip. */
     val copyLabel: String,
-    val minLabel: String,
+    /**
+     * What this deposit is for, in the screen's own words.
+     *
+     * Composed here rather than in the screen because it depends on why the holder arrived. The
+     * same address means two different things: ordinarily it is money on its way to being
+     * spendable, but during an exit it pays that exit's miner fees and is deliberately *not* made
+     * spendable — the funding intent stays down so the exit's own proceeds cannot be swept back
+     * into the Ark. Quoting the board minimum in that second case would name a threshold that has
+     * nothing to do with what the money is for.
+     */
+    val explainer: String,
     /** Money on its way, or null when nothing has arrived yet. */
     val arriving: ArrivingModel?,
 )

@@ -12,8 +12,18 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import xyz.lark.app.core.DemoControls
 import xyz.lark.app.core.LarkCore
+import xyz.lark.app.core.ExitReceipt
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
+import xyz.lark.app.core.OnchainSendQuote
+import xyz.lark.app.core.WalletExit
+import xyz.lark.app.core.format.EXPIRY_PLACEHOLDER
+import xyz.lark.app.core.format.MUTINYNET_BLOCK_SECONDS
 import xyz.lark.app.core.format.MoneyFormat
+import xyz.lark.app.core.format.approxDurationLabel
+import xyz.lark.app.core.format.elapsedLabel
 // Pure destination classification, kept beside the resolver and invoice parser it composes so the
 // input screen and the send path cannot disagree about what counts as payable.
 import xyz.lark.app.core.gateway.SendInput
@@ -59,6 +69,35 @@ private const val FUNDING_POLL_ACTIVE_MILLIS = 20_000L
  * no information. Slower, until something shows up.
  */
 private const val FUNDING_POLL_IDLE_MILLIS = 120_000L
+
+/**
+ * Seconds between unilateral-exit progress passes.
+ *
+ * Fixed rather than adaptive like the funding watcher's, because an exit has no equivalent of
+ * "nothing has arrived yet" — there is always something in flight. Thirty seconds tracks
+ * mutinynet's block target, which is what actually gates the middle of an exit, and keeps the
+ * three-pass stall threshold meaningful at about a minute and a half rather than half an hour.
+ */
+private const val EXIT_POLL_MILLIS = 30_000L
+
+/**
+ * How long to wait before asking again when the exit's state cannot be read yet.
+ *
+ * Short, because this only bridges the wallet's asynchronous open — about a second — and every
+ * tick of it is a tick where a reopened exit has not yet re-entered the mode that forbids
+ * spending. Much shorter than the progress cadence, which is gated by blocks rather than by
+ * whether the app is ready to ask.
+ */
+private const val EXIT_RESUME_RETRY_MILLIS = 500L
+
+/**
+ * The longest gap between resume attempts once backoff has run out of patience.
+ *
+ * A wallet that still cannot answer after a few seconds is not mid-open, it is broken — and the
+ * honest response is to keep asking cheaply rather than either giving up on a live exit or spinning
+ * at full rate forever. Capped low enough that a wallet which recovers is picked up promptly.
+ */
+private const val EXIT_RESUME_RETRY_CEILING_MILLIS = 15_000L
 
 /**
  * Consecutive failures before the user is told anything.
@@ -122,6 +161,40 @@ private data class MachineState(
     /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
     val pasteFailed: Boolean = false,
     /**
+     * The unilateral exit, if one is running.
+     *
+     * Held in machine state rather than read from the capability during render, because render is
+     * pure and the status only changes on a progress pass — which is a suspending call.
+     */
+    val exit: ExitStatus = ExitStatus.NOT_EXITING,
+    /**
+     * The exit delta in blocks, or null while it is not known.
+     *
+     * Read once on the way to the exit screen rather than on every render, because it is a
+     * suspending call and the value does not move. Null survives as null: a wallet with no
+     * reachable Ark server has no delta to read, and that is the wallet most likely to be here.
+     */
+    val exitDeltaBlocks: Int? = null,
+    /**
+     * When the current stall began, or null while the exit is advancing.
+     *
+     * Kept as the moment it started rather than a running duration so the surface can say how long
+     * this has been going without the machine re-deriving it every tick. Cleared the instant a
+     * pass succeeds, because a stall that resolves and returns is a new stall — carrying the old
+     * start time forward would report a wait that never happened.
+     */
+    val exitStalledSince: Long? = null,
+    /** The finished exit's figures, held from the moment it completes until the receipt is gone. */
+    val exitReceipt: ExitReceipt? = null,
+    /**
+     * What the pending on-chain spend would cost, once the quote lands.
+     *
+     * Null until it does, and null again if it cannot be produced — review renders an em-dash
+     * either way rather than filling the row, because the figure sits under a confirm button for
+     * a transaction nobody can recall.
+     */
+    val onchainQuote: OnchainSendQuote? = null,
+    /**
      * Consecutive failed attempts to make an arrived deposit spendable.
      *
      * A count rather than a flag because one failure is noise and three is a problem, and only a
@@ -132,7 +205,20 @@ private data class MachineState(
     val restoring: Boolean = false,
     /** The last words-restore did not open a wallet. Cleared when another attempt starts. */
     val restoreFailed: Boolean = false,
-)
+) {
+    /**
+     * Record an exit pass, starting or clearing the stall clock as the status dictates.
+     *
+     * The clock starts on the first stalled pass and is left alone on subsequent ones, so the
+     * surface reports how long this stall has lasted rather than how long ago the last pass was.
+     * Any unstalled pass clears it outright — including one that later stalls again, which is a
+     * new stall and deserves its own clock.
+     */
+    fun withExit(status: ExitStatus, nowMillis: Long): MachineState = copy(
+        exit = status,
+        exitStalledSince = if (status.stalled) exitStalledSince ?: nowMillis else null,
+    )
+}
 
 /**
  * The app-wide state machine (KTD-2, Bitkey-style: plain class + coroutines, no androidx
@@ -146,8 +232,19 @@ private data class MachineState(
  * is absolute — coroutine suspension can't stretch it. [demo] is the demo-only seam (KTD-3):
  * when absent, demo affordances vanish from the model.
  */
-@Suppress("TooManyFunctions") // one small intent function per prototype interaction, by design
-class AppStateMachine(
+// TooManyFunctions: one small intent function per prototype interaction, by design.
+// LongParameterList: every parameter is an injection seam — the core, its two optional
+// capabilities, two clocks with deliberately different semantics, and the scope. Each is
+// substituted independently by tests, so bundling them into a parameter object would exist only to
+// satisfy the threshold while making the common construction (core + scope) read worse.
+// LargeClass is suppressed rather than fixed, and the distinction matters: this is not one
+// oversized routine but roughly twenty small `render*` functions, each a pure MachineState → model
+// mapping. Splitting them means moving the whole render layer out and widening MachineState's
+// visibility to do it — a refactor of long-standing code, worth doing deliberately rather than as
+// a side effect of adding a destination kind. The copy layers (ExitCopy, SendCopy) were extracted
+// on the way here and are the pattern to continue with.
+@Suppress("TooManyFunctions", "LargeClass", "LongParameterList")
+class AppStateMachine constructor(
     private val core: LarkCore,
     private val demo: DemoControls? = null,
     private val scope: CoroutineScope,
@@ -157,6 +254,12 @@ class AppStateMachine(
      * which is what hides the deposit step rather than showing an address nothing can board.
      */
     private val funding: OnchainFunding? = null,
+    /**
+     * Unilateral exit, when the active core can do it. Null for the demo and the gateway, which
+     * is what keeps the exit screen's promise honest on cores that cannot keep it.
+     */
+    private val walletExit: WalletExit? = null,
+    private val onchainSend: OnchainSend? = null,
     /**
      * Wall-clock epoch millis, for the one deadline that has to survive the app being closed.
      *
@@ -178,12 +281,18 @@ class AppStateMachine(
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
     private var fundingWatcherJob: Job? = null
+    private var exitWatcherJob: Job? = null
 
     init {
         // A wallet that already exists may be carrying a deposit the user asked for before they
         // last closed the app. Nothing else would notice it, so the watcher starts at launch
         // rather than waiting for the user to revisit the funding screen.
         startFundingWatcher()
+        // An exit outlives the app that started it: nothing advances one while LARK is closed, so
+        // a wallet reopened mid-exit is carrying a broadcast that still needs claiming. Resuming
+        // at launch — before any screen asks — is what stops that from waiting on the user
+        // remembering to go and look.
+        resumeExitIfInFlight()
         // The core is the source of truth for wallet facts; a real (push-based) core emits
         // outside our intents, so any emission re-renders the current state. Render is pure
         // and reads the core's current values; StateFlow equality drops no-op re-renders.
@@ -245,6 +354,23 @@ class AppStateMachine(
         push(Route.FUND)
     }
 
+    /**
+     * Open the exit screen, reading the exit delta on the way so the screen can state a wait.
+     *
+     * The read is fire-and-forget and the screen renders immediately: the delta is one figure on
+     * a screen whose other figures are already known, and blocking the navigation on a call that
+     * may be talking to an unreachable server would be the wrong trade. When it does not arrive
+     * the screen says so, which it has to be able to do anyway.
+     */
+    fun goExit() {
+        push(Route.EXIT)
+        val exit = walletExit ?: return
+        scope.launch {
+            val delta = runCatching { exit.exitDeltaBlocks() }.getOrNull()
+            update { it.copy(exitDeltaBlocks = delta) }
+        }
+    }
+
     fun goRestore() = push(Route.RESTORE)
 
     /**
@@ -259,8 +385,17 @@ class AppStateMachine(
      * found would undo the exit; an app that boards only what the user asked for cannot.
      */
     fun goDeposit() {
+        // Not while leaving. Arming here during an exit would board the exit's own proceeds back
+        // into the wallet they were just pulled out of — the exact undo `startExit` disarms to
+        // prevent, reintroduced by the one screen whose job is to arm.
+        val leaving = state.exit.isExiting
+        // Armed before the push, because the push is what renders. Both the balance and the
+        // deposit screen read the request to decide whether money is on its way, so arming after
+        // would draw the first frame — the one the holder is looking at — from a wallet nobody
+        // had asked yet.
+        if (!leaving) funding?.armFunding(wallClockMillis())
         push(Route.DEPOSIT)
-        funding?.armFunding(wallClockMillis())
+        if (leaving) return
         startFundingWatcher()
     }
 
@@ -273,10 +408,113 @@ class AppStateMachine(
      * rather than merely unlikely.
      */
     fun startExit() {
+        standDownFunding()
+        go(Route.HOME)
+        val exit = walletExit ?: return
+        exitWatcherJob?.cancel()
+        exitWatcherJob = scope.launch {
+            exit.startExit()
+            driveExit(exit)
+        }
+    }
+
+    /**
+     * Pick up an exit that was already running when the app started.
+     *
+     * Called from `init`, so a wallet reopened mid-exit resumes before any screen asks. The
+     * funding stand-down is repeated here rather than assumed: the exit that armed it may have
+     * been started by a previous process, and the intent it cleared is persisted.
+     */
+    private fun resumeExitIfInFlight() {
+        val exit = walletExit ?: return
+        exitWatcherJob?.cancel()
+        exitWatcherJob = scope.launch {
+            // Wait for an answer rather than assuming one. This runs at construction, before the
+            // wallet has finished opening, so the first reads come back "cannot tell" — and both
+            // of the obvious shortcuts here are wrong in the same direction. Reading the status
+            // property gives NOT_EXITING because nothing has filled it in yet; treating an
+            // unreadable read as NOT_EXITING gives up on a real exit permanently. Either way the
+            // holder reopens the app to an ordinary wallet with their money mid-exit and the
+            // guards off, which is the worst state this feature can produce.
+            var status = exit.readExitStatus()
+            var wait = EXIT_RESUME_RETRY_MILLIS
+            while (status == null) {
+                delay(wait)
+                // Backs off rather than hammering. The first few retries bridge the wallet's open,
+                // which is the case this exists for; past that, something is wrong and polling
+                // twice a second for the life of the process would only hide it behind a flat
+                // battery. The ceiling keeps a recovered wallet from waiting long once it can talk.
+                wait = (wait * 2).coerceAtMost(EXIT_RESUME_RETRY_CEILING_MILLIS)
+                status = exit.readExitStatus()
+            }
+            update { it.withExit(status, wallClockMillis()) }
+            if (!status.isExiting) {
+                showReceiptIfPending(exit)
+                return@launch
+            }
+            standDownFunding()
+            driveExit(exit)
+        }
+    }
+
+    /**
+     * Put the finished exit's receipt up, if one is owed.
+     *
+     * Routes rather than merely rendering, because the receipt has to be seen: it is the one
+     * moment the app's central claim is demonstrably true, and a holder who opened the app to an
+     * ordinary home would never learn their exit had completed except by counting sats.
+     */
+    private suspend fun showReceiptIfPending(exit: WalletExit) {
+        val receipt = exit.pendingReceipt() ?: return
+        update { it.copy(exitReceipt = receipt) }
+        go(Route.EXIT_DONE)
+    }
+
+    /**
+     * Dismiss the receipt and return to an ordinary wallet.
+     *
+     * Acknowledging first means a crash between the two shows home rather than the receipt again —
+     * the right way to fail for a screen whose contract is that it appears once.
+     */
+    fun dismissExitReceipt() {
+        val exit = walletExit
+        update { it.copy(exitReceipt = null) }
+        go(Route.HOME)
+        scope.launch { exit?.acknowledgeReceipt() }
+    }
+
+    /**
+     * Drive the exit forward until every VTXO is claimed.
+     *
+     * Its own job rather than a branch of the funding watcher, because the two have opposite
+     * lifecycles — this one runs precisely when that one must not — and sharing a loop would
+     * couple a guard to the thing it guards.
+     *
+     * The loop has no failure exit. A stalled exit keeps being retried and is reported as stalled,
+     * because there is no honest way to leave a state whose transactions cannot be recalled.
+     */
+    private suspend fun driveExit(exit: WalletExit) {
+        var status = exit.progressExit()
+        update { it.withExit(status, wallClockMillis()) }
+        while (status.isExiting) {
+            delay(EXIT_POLL_MILLIS)
+            status = exit.progressExit()
+            update { it.withExit(status, wallClockMillis()) }
+        }
+        showReceiptIfPending(exit)
+    }
+
+    /**
+     * Clear the funding intent and stop the watcher.
+     *
+     * Exit proceeds land in the same on-chain wallet the watcher reads, so an armed intent would
+     * board them straight back into a wallet that is leaving. Erasing the intent — rather than
+     * trusting its window to lapse — is what makes that impossible rather than merely unlikely.
+     */
+    private fun standDownFunding() {
         funding?.disarmFunding()
         fundingWatcherJob?.cancel()
         fundingWatcherJob = null
-        go(Route.HOME)
     }
 
     /** Completing onboarding ("Later" on fund, or leaving the deposit screen) lands home. */
@@ -342,7 +580,7 @@ class AppStateMachine(
             requestReceiveAmount(typedSats(s))
             back()
         } else {
-            push(Route.REVIEW)
+            goReview()
         }
     }
 
@@ -428,7 +666,29 @@ class AppStateMachine(
             return
         }
         update { it.copy(digits = "", scannedSats = fixedAmount, mode = KeypadMode.SEND) }
+        goReview()
+    }
+
+    /**
+     * Open review, quoting the miner fee first when the destination is on-chain.
+     *
+     * The quote is fetched rather than blocked on: review renders immediately with the fee as an
+     * unknown and fills it in when the answer arrives. Blocking would stall the screen on a chain
+     * source that may be slow or gone, and the confirm button reads the same model — so a quote
+     * that never lands leaves an em-dash under it rather than a number nobody computed.
+     */
+    private fun goReview() {
         push(Route.REVIEW)
+        update { it.copy(onchainQuote = null) }
+        val destination = classifySendInput(state.input).takeIf { it.isOnchain }?.destination
+        val send = onchainSend
+        if (destination == null || send == null) return
+        val sats = typedSats(state)
+        scope.launch {
+            val quote = runCatching { send.quoteOnchainSend(destination, sats) }.getOrNull()
+            // Only apply while this is still the spend being reviewed.
+            update { if (it.route == Route.REVIEW) it.copy(onchainQuote = quote) else it }
+        }
     }
 
     /** Picking a recent pre-fills the recipient and jumps to a fresh send keypad. */
@@ -460,7 +720,7 @@ class AppStateMachine(
                 mode = KeypadMode.SEND,
             )
         }
-        go(Route.REVIEW)
+        goReview()
     }
 
     /**
@@ -486,12 +746,32 @@ class AppStateMachine(
 
     /** Runs the confirmed-snapshot send behind the working spinner. */
     private fun startSend() {
+        // A wallet mid-exit has no VTXOs left to spend. Asking the core anyway would surface the
+        // true reason as whatever engine error came back, so the refusal belongs here.
+        //
+        // On-chain is exempt: it spends the on-chain balance, which an exit fills rather than
+        // empties, and refusing it would strand exit proceeds behind the exit that produced them.
+        val onchain = classifySendInput(state.confirmedRecipient).isOnchain
+        if (state.exit.isExiting && !onchain) return
         push(Route.SENDING)
         workJob?.cancel()
         workJob = scope.launch {
-            val result = core.send(state.confirmedRecipient, state.confirmedSats)
+            val result = if (onchain) sendOnchain() else core.send(state.confirmedRecipient, state.confirmedSats)
             landIfStillSending(landingFor(result))
         }
+    }
+
+    /**
+     * Spend the on-chain balance, mapped onto the same result the Ark path returns.
+     *
+     * A broadcast transaction is settlement in the sense this app means it — it is on the network
+     * and nothing further can retract it — so this lands on Sent rather than Pending. That is the
+     * opposite call from the Ark path, where an accepted payment can still fail later.
+     */
+    private suspend fun sendOnchain(): SendResult {
+        val send = onchainSend ?: return SendResult.Failure
+        val txid = send.sendOnchain(state.confirmedRecipient, state.confirmedSats)
+        return if (txid != null) SendResult.Success else SendResult.Failure
     }
 
     /**
@@ -543,18 +823,28 @@ class AppStateMachine(
      * deposit that has not been made yet.
      */
     private fun startFundingWatcher() {
-        if (funding == null) return
+        val funding = funding ?: return
         fundingWatcherJob?.cancel()
         fundingWatcherJob = scope.launch {
             while (true) {
-                if (!fundingArmed) {
+                if (fundingArmed) {
+                    pollFundingOnce()
+                } else {
+                    // Reading is not consent, so the sync is not gated on the request the way
+                    // boarding is. What the holder owns has to be known whether or not they asked
+                    // for a deposit: a wallet that has finished an exit holds its money on-chain
+                    // with nothing armed, and home cannot report a balance it never looks at.
+                    // Gating the read as well is what made that wallet show ₿0 over its own funds.
+                    funding.syncOnchain()
                     // Erase rather than merely stop. A lapsed request left on disk would spring
                     // back to life the next time any money appeared on-chain — including funds
-                    // from an exit — because the balance clause above would re-qualify it.
-                    funding.disarmFunding()
-                    return@launch
+                    // from an exit — because the balance clause in `fundingArmed` would re-qualify
+                    // it. Nothing here boards: this branch is precisely the unasked-for case.
+                    if (funding.fundingArmedAtMillis != null) funding.disarmFunding()
+                    // The sync moved numbers the balance is rendered from; nothing else will
+                    // re-render, because no state field changed.
+                    update { it }
                 }
-                pollFundingOnce()
                 delay(if (funding.onchainSats > 0) FUNDING_POLL_ACTIVE_MILLIS else FUNDING_POLL_IDLE_MILLIS)
             }
         }
@@ -696,6 +986,16 @@ class AppStateMachine(
     private fun isOverBalance(s: MachineState): Boolean =
         s.mode == KeypadMode.SEND && typedSats(s) > core.balanceSats.value
 
+    /**
+     * An amount, or an em-dash when there is no amount to state.
+     *
+     * The house rule applied to money the app cannot account for exactly. Zero and unknown are
+     * different facts — nothing has landed yet, versus this process never saw what did — and only
+     * one of them is a number.
+     */
+    private fun amountOrUnknown(sats: Long?, denomination: Denomination): String =
+        sats?.let { primary(it, denomination) } ?: EXPIRY_PLACEHOLDER
+
     private fun primary(sats: Long, denomination: Denomination): String =
         if (denomination == Denomination.FIAT) MoneyFormat.fiat(sats, core.fiatRate) else MoneyFormat.btc(sats)
 
@@ -711,6 +1011,15 @@ class AppStateMachine(
             denomination = s.denomination,
             balance = renderBalance(s),
             exitAmount = primary(core.balanceSats.value, s.denomination),
+            exitEstimates = ExitEstimatesModel(
+                // Always unknown today: bark keeps its exit-cost estimate crate-private, so
+                // nothing above the engine can price an exit. Not a guess, and not a hidden row.
+                minerFee = EXPIRY_PLACEHOLDER,
+                readyIn = approxDurationLabel(
+                    blocks = s.exitDeltaBlocks?.toLong(),
+                    secondsPerBlock = MUTINYNET_BLOCK_SECONDS,
+                ),
+            ),
             health = renderHealth(),
             keypad = renderKeypad(s),
             send = renderSend(s),
@@ -726,6 +1035,40 @@ class AppStateMachine(
             networkLabel = core.networkLabel,
             restore = RestoreModel(busy = s.restoring, failed = s.restoreFailed),
             deposit = renderDeposit(s),
+            exiting = renderExiting(s, advanced.network.chainTip),
+            exitDone = s.exitReceipt?.let { receipt ->
+                ExitDoneModel(
+                    // Both from the claim as it was built. Unknown only when this process did not
+                    // build it — and unknown then, rather than the claimed VTXOs' face value,
+                    // which is what the money was worth before the claim took its fee out.
+                    landed = amountOrUnknown(receipt.landedSats, s.denomination),
+                    minerFee = amountOrUnknown(receipt.feeSats, s.denomination),
+                    took = elapsedLabel(receipt.tookMillis),
+                )
+            },
+        )
+    }
+
+    /**
+     * The exiting surface, or null when the wallet is not leaving.
+     *
+     * Never masked by the hidden-balance setting, following the exit screen's precedent: a screen
+     * whose whole job is to say what is moving on-chain cannot hide the figure.
+     */
+    private fun renderExiting(s: MachineState, tipHeight: Long?): ExitingModel? {
+        val status = s.exit
+        if (!status.isExiting) return null
+        return ExitingModel(
+            headline = exitHeadline(status, tipHeight),
+            detail = exitDetail(status, s.exitStalledSince, wallClockMillis()),
+            inFlight = primary(status.inFlightSats, s.denomination),
+            landed = amountOrUnknown(status.landedSats, s.denomination),
+            claimedOf = "${status.claimedCount} of ${status.vtxoCount} claimed",
+            stalled = status.stalled,
+            // Read from the seam rather than decided here, so the UI cannot drift from the
+            // classification about which stalls a holder can actually clear.
+            stallAction = "Add on-chain funds"
+                .takeIf { status.stalled && status.reason?.isClearableByDeposit == true },
         )
     }
 
@@ -764,14 +1107,33 @@ class AppStateMachine(
         if (s.balanceVisible) MoneyFormat.btc(sats) else HIDDEN_BALANCE
 
     private fun renderBalance(s: MachineState): BalanceModel {
-        val sats = core.balanceSats.value
+        // The headline is everything the holder owns. `core.balanceSats` is the off-chain balance
+        // alone, and it stays that way — it is what the send path validates against, and widening
+        // it would let a keypad offer to spend coins Ark cannot reach. What changes is only what
+        // home *says*, because a wallet that has finished an exit owns its money on-chain and a
+        // screen reading ₿0 over it was the plainest possible falsehood.
+        val offchain = core.balanceSats.value
+        val onchain = funding?.confirmedSats ?: 0L
+        val sats = offchain + onchain
+        val arriving = renderArriving(s, masked = !s.balanceVisible)
         return BalanceModel(
             visible = s.balanceVisible,
             hideLabel = if (s.balanceVisible) "Hide" else "Show",
             primary = if (s.balanceVisible) primary(sats, s.denomination) else HIDDEN_BALANCE,
             secondary = if (s.balanceVisible) secondary(sats, s.denomination) else HIDDEN_BALANCE,
             unitLabel = if (s.denomination == Denomination.FIAT) "Dollars" else "Bitcoin (₿)",
-            arriving = renderArriving(s, masked = !s.balanceVisible),
+            arriving = arriving,
+            // Only when it distinguishes something. With nothing on-chain the total is the
+            // spendable balance and a split line would be noise on every ordinary wallet; with
+            // money arriving, that line already accounts for the same sats and says more.
+            split = if (onchain > 0L && s.balanceVisible && arriving == null) {
+                BalanceSplitModel(
+                    instant = primary(offchain, s.denomination),
+                    onchain = primary(onchain, s.denomination),
+                )
+            } else {
+                null
+            },
         )
     }
 
@@ -784,7 +1146,13 @@ class AppStateMachine(
      */
     private fun renderArriving(s: MachineState, masked: Boolean): ArrivingModel? {
         val funding = funding
-        if (funding == null || funding.onchainSats == 0L) return null
+        // The armed check is what keeps this to money the app is actually going to act on. Nothing
+        // boards an unasked-for balance — exit proceeds least of all — so promising it "in a few
+        // minutes" was a wait that would never end. Unasked-for on-chain money is not arriving
+        // anywhere; it has arrived, and the balance's split line is what names it.
+        if (funding == null || funding.onchainSats == 0L || funding.fundingArmedAtMillis == null) {
+            return null
+        }
         val arriving = funding.onchainSats
         // Only definite when nothing is still confirming: pending funds may yet carry the total
         // over the minimum, and calling that a shortfall would send the user to top up for nothing.
@@ -858,18 +1226,26 @@ class AppStateMachine(
             inputResolved = input.isResolved,
             inputSummary = sendInputSummary(s, input),
             fixedAmount = input.amountSat != null,
+            onchainRoute = if (input.isOnchain) {
+                OnchainRouteModel(
+                    fee = s.onchainQuote?.let { primary(it.feeSats, s.denomination) }
+                        ?: EXPIRY_PLACEHOLDER,
+                    total = s.onchainQuote?.let { primary(it.totalSats, s.denomination) }
+                        ?: EXPIRY_PLACEHOLDER,
+                )
+            } else {
+                null
+            },
         )
     }
 
     /** The line under the input card: what was recognized, or that nothing was. */
-    private fun sendInputSummary(s: MachineState, input: SendInput): String = when {
-        s.input.isBlank() && s.pasteFailed ->
-            "Nothing came through from the clipboard. Long-press the field to paste, or type it in."
-        s.input.isBlank() -> "A name, an invoice, or a bitcoin address — LARK works out the rest."
-        !input.isResolved -> "That doesn’t look like an invoice or address LARK can pay."
-        input.amountSat != null -> "Invoice for ${primary(input.amountSat, s.denomination)}."
-        else -> "Ready to pay ${input.display}."
-    }
+    private fun sendInputSummary(s: MachineState, input: SendInput): String = sendSummary(
+        typed = s.input,
+        pasteFailed = s.pasteFailed,
+        input = input,
+        invoiceAmount = input.amountSat?.let { primary(it, s.denomination) },
+    )
 
     private fun renderTxDetail(s: MachineState): TxDetailModel {
         val tx = core.activity.getOrNull(s.txIndex) ?: core.activity.firstOrNull()
@@ -920,7 +1296,7 @@ class AppStateMachine(
         return DepositModel(
             address = core.depositAddress,
             copyLabel = if (s.copied) "Copied" else "Copy",
-            minLabel = MoneyFormat.btc(funding.minBoardSats),
+            explainer = depositExplainer(exiting = s.exit.isExiting, minBoardSats = funding.minBoardSats),
             // Never masked, following the exit screen's precedent: a screen whose whole job is to
             // report what arrived should not hide it because the home balance is hidden.
             arriving = renderArriving(s, masked = false),

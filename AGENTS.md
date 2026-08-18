@@ -33,6 +33,20 @@ cd iosApp && xcodegen generate && xcodebuild -scheme iosApp -configuration Debug
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
+**A green FFI lane does not mean it tested your Rust change.** `FfiHostLibraryTest` reaches the
+crate through a system-property path (`jna.library.path`), so Gradle cannot see the library as an
+input: it loads whatever `rust/lark-ffi/target/debug/liblark_ffi.dylib` happens to be on disk. Edit
+the crate, run the lane without rebuilding, and it passes against the *previous* build — indefinitely
+and silently. `--rerun-tasks` does not help; it re-runs the tests, not the compiler. Run
+`bash scripts/build-rust.sh` first, as `scripts/ci.sh` does, or trust nothing the lane tells you.
+This has already shipped one broken commit to CI.
+
+**A green Kotlin suite does not mean the iOS app builds.** `:composeApp:testDebugUnitTest` compiles
+`commonMain` and `commonTest` only — it never touches `iosMain`, so anything Swift calls across the
+delegate seam can be broken while every test passes. `:composeApp:linkDebugFrameworkIosSimulatorArm64`
+is the cheap check (seconds, and it does compile `iosMain`); `xcodebuild` is the complete one. This
+has bitten three times in one feature.
+
 Two things that will bite a fresh checkout:
 
 - **The Rust core's XCFramework is a build artifact, not in the repo** (~216MB). The iOS app links

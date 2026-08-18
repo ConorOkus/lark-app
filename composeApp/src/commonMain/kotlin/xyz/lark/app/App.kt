@@ -39,6 +39,7 @@ import xyz.lark.app.ui.screens.pay.SentScreen
 import xyz.lark.app.ui.screens.receive.ReceiveScreen
 import xyz.lark.app.ui.screens.settings.AdvancedScreen
 import xyz.lark.app.ui.screens.settings.BackupScreen
+import xyz.lark.app.ui.screens.settings.ExitDoneScreen
 import xyz.lark.app.ui.screens.settings.ExitScreen
 import xyz.lark.app.ui.screens.settings.HealthScreen
 import xyz.lark.app.ui.screens.settings.SettingsScreen
@@ -60,6 +61,8 @@ private object AppGraph {
             demo = selection.demo,
             scope = scope,
             funding = selection.funding,
+            walletExit = selection.walletExit,
+            onchainSend = selection.onchainSend,
         )
     }
 }
@@ -145,6 +148,9 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             Route.HEALTH -> HealthRoute(model = model, machine = machine)
             Route.ADVANCED -> AdvancedScreen(model = model, machine = machine)
             Route.EXIT -> ExitRoute(model = model, machine = machine)
+            Route.EXIT_DONE -> model.exitDone?.let { done ->
+                ExitDoneScreen(done = done, onDone = machine::dismissExitReceipt)
+            }
         }
     }
 }
@@ -208,6 +214,7 @@ private fun HealthRoute(model: AppModel, machine: AppStateMachine) = HealthScree
 @Composable
 private fun ExitRoute(model: AppModel, machine: AppStateMachine) = ExitScreen(
     amount = model.exitAmount, // always unmasked: the screen states what moves on-chain (issue #4)
+    estimates = model.exitEstimates,
     onBack = machine::back,
     onStart = machine::startExit,
 )

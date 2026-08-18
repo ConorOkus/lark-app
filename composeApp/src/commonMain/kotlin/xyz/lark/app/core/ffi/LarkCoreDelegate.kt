@@ -117,7 +117,125 @@ interface LarkCoreDelegate {
      * from a fresh one.
      */
     fun chainTip(onResult: (height: Long?, error: String?) -> Unit)
+
+    /**
+     * Begin a unilateral exit for the whole VTXO set.
+     *
+     * Needs no Ark server, which is the entire point — an implementation must not gate it on one
+     * being reachable. Calling it while an exit is already running is harmless.
+     *
+     * There is no matching `cancelExit`, and the absence is the contract: a mempool transaction
+     * cannot be recalled.
+     */
+    fun startExit(onDone: (error: String?) -> Unit)
+
+    /**
+     * Advance the exit by one pass and report where it stands.
+     *
+     * One call does not finish an exit — the middle of one is bounded by the chain, not by effort
+     * — so callers drive this repeatedly for as long as the wallet is exiting.
+     */
+    fun progressExit(onResult: (status: FfiExitStatus?, error: String?) -> Unit)
+
+    /**
+     * Where the exit stands, without advancing it. A local read, so it answers while offline.
+     */
+    fun exitStatus(onResult: (status: FfiExitStatus?, error: String?) -> Unit)
+
+    /**
+     * How many blocks a started exit must wait out, or null when it cannot be known.
+     *
+     * Null is a real answer, not a failure: the delta lives on the Ark server and bark does not
+     * persist it, so a wallet with no reachable server cannot know it — the exact situation this
+     * whole feature exists for. Callers render null as unknown and never substitute a default.
+     */
+    fun exitDeltaBlocks(onResult: (blocks: Long?, error: String?) -> Unit)
+
+    /**
+     * Spend on-chain funds to [address].
+     *
+     * Not exit-specific: exit proceeds, an unspent board, and leftover change all leave this way.
+     * The returned string is a txid.
+     */
+    fun onchainSend(address: String, sats: Long, onResult: (txid: String?, error: String?) -> Unit)
+
+    /**
+     * What [onchainSend] would cost, without sending it. Nothing is signed or broadcast.
+     */
+    fun onchainSendFee(
+        address: String,
+        sats: Long,
+        onResult: (quote: FfiOnchainFeeQuote?, error: String?) -> Unit,
+    )
 }
+
+/**
+ * How far a unilateral exit has got, as the crate reports it.
+ *
+ * The wallet's stage is the least advanced of its exiting VTXOs, so [CLAIMED] means every one of
+ * them is.
+ */
+enum class FfiExitStage {
+    NONE,
+    START,
+    PROCESSING,
+    AWAITING_DELTA,
+    CLAIMABLE,
+    CLAIM_IN_PROGRESS,
+    CLAIMED,
+
+    /** A channel stage this build cannot advance. Reported rather than mapped onto a real stage. */
+    UNSUPPORTED,
+}
+
+/**
+ * Why an exit is not progressing, as the crate classifies it.
+ *
+ * The crate collapses its engine's 26 error variants into these before they cross, so the app
+ * never has to pattern-match an error string it does not own.
+ */
+enum class FfiExitStallCategory {
+    CHAIN_UNREACHABLE,
+    INSUFFICIENT_FUNDS,
+    UNECONOMIC,
+    BROADCAST_REJECTED,
+    UNEXPECTED,
+}
+
+/**
+ * The wallet's exit, as the crate reports it.
+ *
+ * [errors] is per-pass, not sticky: a pass says what went wrong *this* time. Turning repetition
+ * into "stalled" is the adapter's job, because the threshold is app policy.
+ *
+ * [errors] carries VTXO ids and the engine's own wording and is **for logs only**;
+ * [stallCategory] is the classified form and the only one a screen may speak.
+ */
+data class FfiExitStatus(
+    val stage: FfiExitStage,
+    val vtxoCount: Int,
+    val claimedCount: Int,
+    val totalSat: Long,
+    /** What the claim actually paid out, or null when this process did not build it. */
+    val landedSat: Long? = null,
+    /** What that claim cost in miner fees, on the same terms as [landedSat]. */
+    val claimFeeSat: Long? = null,
+    val errors: List<String>,
+    val stallCategory: FfiExitStallCategory? = null,
+    /** Height at which every exiting VTXO becomes claimable; null until the exit knows. */
+    val claimableAtHeight: Long? = null,
+)
+
+/**
+ * What an on-chain send would cost.
+ *
+ * [totalSat] is amount plus fee — the figure that actually leaves the wallet — because that is
+ * what a user checks against their balance.
+ */
+data class FfiOnchainFeeQuote(
+    val feeSat: Long,
+    val totalSat: Long,
+)
 
 /**
  * Where the wallet lives and what it talks to.

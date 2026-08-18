@@ -15,7 +15,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.blockExpiryLabel
+import xyz.lark.app.core.EXIT_STALL_THRESHOLD
+import xyz.lark.app.core.ExitReceipt
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.OnchainFunding
+import xyz.lark.app.core.OnchainSend
+import xyz.lark.app.core.OnchainSendQuote
+import xyz.lark.app.core.WalletExit
 import xyz.lark.app.core.gateway.arkReceiveUri
 import xyz.lark.app.core.model.AdvancedStats
 import xyz.lark.app.core.model.Contact
@@ -67,6 +74,12 @@ private const val MAINTENANCE_EVERY_N_CYCLES = 4
 data class FfiTuning(
     val pollInterval: Duration = DEFAULT_POLL_INTERVAL,
     val secondsPerBlock: Int = MUTINYNET_SECONDS_PER_BLOCK,
+    /**
+     * Wall clock, here rather than on the constructor for the same reason the rest of this class
+     * is: it is a knob, not a collaborator. Wall rather than monotonic because the exit timings it
+     * stamps are compared across app launches, where a monotonic reading means nothing.
+     */
+    val wallClockMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 )
 
 /** mutinynet targets 30-second blocks; see [FfiTuning.secondsPerBlock]. */
@@ -95,7 +108,7 @@ class DelegateBackedLarkCore(
     private val config: FfiWalletConfig,
     override val networkLabel: String,
     private val tuning: FfiTuning = FfiTuning(),
-) : LarkCore, OnchainFunding {
+) : LarkCore, OnchainFunding, WalletExit, OnchainSend {
 
     /** Seeded from disk, not from the open: see the class comment's point 3. */
     private val walletExistsFlow = MutableStateFlow(store.walletFileExists())
@@ -183,6 +196,116 @@ class DelegateBackedLarkCore(
     override fun armFunding(atMillis: Long) = store.storeFundingArmedAt(atMillis)
 
     override fun disarmFunding() = store.storeFundingArmedAt(null)
+
+    // --- WalletExit ---
+
+    /**
+     * Consecutive progress passes that came back with an error.
+     *
+     * Counted here rather than in the crate because "how many failures means stalled" is app
+     * policy, and a threshold compiled into the FFI would be beyond the app's reach. Any clean
+     * pass resets it, so a stall reported once can clear.
+     */
+    private var consecutiveExitFailures = 0
+
+    override var exitStatus: ExitStatus = ExitStatus.NOT_EXITING
+        private set
+
+    override suspend fun startExit() {
+        delegate.awaitDone { onDone -> startExit(onDone) }
+        // Stamped before the first status read so a crash between the two still leaves a start to
+        // measure from. An exit whose duration is unknown is a smaller loss than one whose start
+        // is recorded after hours of progress.
+        if (store.loadExitTimes() == null) store.storeExitTimes(ExitTimes(startedAt = tuning.wallClockMillis()))
+        refreshExitStatus()
+    }
+
+    override suspend fun progressExit(): ExitStatus {
+        val reported = delegate.awaitValue<FfiExitStatus> { onResult -> progressExit(onResult) }
+        consecutiveExitFailures = when {
+            // A pass that could not run at all is as much a failure to advance as one the crate
+            // reported an error for; treating a dropped call as "fine" would hide a real stall.
+            reported == null -> consecutiveExitFailures + 1
+            reported.errors.isEmpty() -> 0
+            else -> consecutiveExitFailures + 1
+        }
+        // A pass that could not be read still counts, and still has to be sayable. Falling back to
+        // the previous status unchanged would drop the stall along with the failure that caused
+        // it, leaving the surface on a stage name forever.
+        exitStatus = reported.toExitStatus(consecutiveExitFailures)
+            ?: exitStatus.afterUnreadablePass(consecutiveExitFailures)
+        recordCompletionIfFinished()
+        return exitStatus
+    }
+
+    /**
+     * Stamp the finish the first time a pass reports one.
+     *
+     * Guarded on the stamp being absent rather than on the transition, because the transition is
+     * only observable by whichever pass happens to catch it — and a relaunch mid-exit means no
+     * pass in this process ever saw the earlier stages. Presence of the stamp is the fact; when it
+     * was written is not.
+     */
+    private fun recordCompletionIfFinished() {
+        if (exitStatus.stage != ExitStage.CLAIMED) return
+        store.loadExitTimes()
+            ?.takeIf { it.completedAt == null }
+            ?.let { store.storeExitTimes(it.copy(completedAt = tuning.wallClockMillis())) }
+    }
+
+    /**
+     * Null unless an exit has finished and the holder has not dismissed its receipt.
+     *
+     * The landed figure comes from the live status rather than from storage: bark keeps claimed
+     * exit VTXOs, so the amount is still readable after any number of relaunches, and storing a
+     * second copy would only create a way for the two to disagree about money.
+     */
+    override suspend fun pendingReceipt(): ExitReceipt? =
+        store.loadExitTimes()?.takeIf { it.completedAt != null }?.let { times ->
+            ExitReceipt(
+                landedSats = exitStatus.landedSats,
+                feeSats = exitStatus.claimFeeSats,
+                tookMillis = (times.completedAt!! - times.startedAt).coerceAtLeast(0L),
+            )
+        }
+
+    override suspend fun acknowledgeReceipt() = store.storeExitTimes(null)
+
+    // --- On-chain send ---
+
+    /** Confirmed only: an unconfirmed input cannot reliably fund a spend the holder is about to make. */
+    override val spendableSats: Long get() = onchain?.confirmedSat ?: 0L
+
+    override suspend fun quoteOnchainSend(address: String, sats: Long): OnchainSendQuote? =
+        delegate.awaitValue<FfiOnchainFeeQuote> { onResult -> onchainSendFee(address, sats, onResult) }
+            ?.let { OnchainSendQuote(feeSats = it.feeSat, totalSats = it.totalSat) }
+
+    override suspend fun sendOnchain(address: String, sats: Long): String? =
+        delegate.awaitValue<String> { onResult -> onchainSend(address, sats, onResult) }
+
+    /**
+     * Null when the crate cannot answer, which includes both "no server to ask" and a failed call.
+     * Both are the same fact to a caller — the delta is not known — and neither may become a
+     * number on screen.
+     */
+    override suspend fun exitDeltaBlocks(): Int? =
+        delegate.awaitValue<Long> { onResult -> exitDeltaBlocks(onResult) }?.toInt()
+
+    /**
+     * Null while the wallet is still opening, which is the case that matters: the machine resumes
+     * at construction and the open is a second of async work behind it. Reporting NOT_EXITING here
+     * would tell the caller there is nothing to resume, for every exit, on every launch.
+     */
+    override suspend fun readExitStatus(): ExitStatus? =
+        delegate.awaitValue<FfiExitStatus> { onResult -> exitStatus(onResult) }
+            ?.toExitStatus(consecutiveExitFailures)
+            ?.also { exitStatus = it }
+
+    /** Re-read the exit without advancing it, for the status the machine resumes from. */
+    private suspend fun refreshExitStatus() {
+        val reported = delegate.awaitValue<FfiExitStatus> { onResult -> exitStatus(onResult) }
+        exitStatus = reported.toExitStatus(consecutiveExitFailures) ?: exitStatus
+    }
 
     init {
         // A wallet already on disk is opened without waiting for the user to ask (R3).

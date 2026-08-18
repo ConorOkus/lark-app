@@ -173,6 +173,94 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in try await wallet.boardAll() }
     }
 
+    // MARK: - Unilateral exit
+
+    // No `cancelExit` here, and that is the contract rather than an omission: once an exit
+    // transaction is in the mempool it cannot be recalled.
+
+    func startExit(onDone: @escaping (String?) -> Void) {
+        performVoid(onDone) { wallet in try await wallet.startExit() }
+    }
+
+    func progressExit(onResult: @escaping (FfiExitStatus?, String?) -> Void) {
+        perform(onResult) { wallet in Self.mapExit(try await wallet.progressExit()) }
+    }
+
+    func exitStatus(onResult: @escaping (FfiExitStatus?, String?) -> Void) {
+        perform(onResult) { wallet in Self.mapExit(try await wallet.exitStatus()) }
+    }
+
+    /// Nil here means the delta is genuinely unknowable — no server to ask — not that the call
+    /// failed. The adapter treats both the same way, because a screen must render either as an
+    /// unknown rather than guessing a wait for an irreversible operation.
+    func exitDeltaBlocks(onResult: @escaping (KotlinLong?, String?) -> Void) {
+        performOptional(onResult) { wallet in
+            try await wallet.exitDeltaBlocks().map { KotlinLong(value: Int64($0)) }
+        }
+    }
+
+    func onchainSend(address: String, sats: Int64, onResult: @escaping (String?, String?) -> Void) {
+        perform(onResult) { wallet in
+            try await wallet.onchainSend(address: address, sats: UInt64(sats))
+        }
+    }
+
+    func onchainSendFee(
+        address: String,
+        sats: Int64,
+        onResult: @escaping (FfiOnchainFeeQuote?, String?) -> Void
+    ) {
+        perform(onResult) { wallet in
+            let quote = try await wallet.onchainSendFee(address: address, sats: UInt64(sats))
+            return FfiOnchainFeeQuote(
+                feeSat: Int64(quote.feeSat),
+                totalSat: Int64(quote.totalSat)
+            )
+        }
+    }
+
+    /// Crate exit status to the boundary's shape. The stage enum is mapped explicitly rather than
+    /// by raw value so a new crate stage fails to compile here instead of silently becoming
+    /// whichever case happened to share its ordinal.
+    private static func mapExit(_ status: ExitStatusInfo) -> FfiExitStatus {
+        let stage: FfiExitStage
+        switch status.stage {
+        case .none: stage = .none
+        case .start: stage = .start
+        case .processing: stage = .processing
+        case .awaitingDelta: stage = .awaitingDelta
+        case .claimable: stage = .claimable
+        case .claimInProgress: stage = .claimInProgress
+        case .claimed: stage = .claimed
+        case .unsupported: stage = .unsupported
+        }
+        // Mapped explicitly for the same reason as the stage: a category added by a later crate
+        // version must break this build rather than land on whichever case shares its ordinal.
+        // Getting this wrong would silently offer a deposit for a stall depositing cannot clear.
+        var category: FfiExitStallCategory?
+        switch status.stallCategory {
+        case .some(.chainUnreachable): category = .chainUnreachable
+        case .some(.insufficientFunds): category = .insufficientFunds
+        case .some(.uneconomic): category = .uneconomic
+        case .some(.broadcastRejected): category = .broadcastRejected
+        case .some(.unexpected): category = .unexpected
+        case .none: category = nil
+        }
+        return FfiExitStatus(
+            stage: stage,
+            vtxoCount: Int32(status.vtxoCount),
+            claimedCount: Int32(status.claimedCount),
+            totalSat: Int64(status.totalSat),
+            // Optional across the boundary: unknown stays unknown rather than becoming a zero the
+            // receipt would render as an amount.
+            landedSat: status.landedSat.map { KotlinLong(value: Int64($0)) },
+            claimFeeSat: status.claimFeeSat.map { KotlinLong(value: Int64($0)) },
+            errors: status.errors,
+            stallCategory: category,
+            claimableAtHeight: status.claimableAtHeight.map { KotlinLong(value: Int64($0)) }
+        )
+    }
+
     // MARK: - Plumbing
 
     /// Runs `body` against the open wallet on a detached task and reports its result exactly once.
@@ -194,6 +282,32 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
                 // The adapter above turns every failure into the same coarse seam outcome, so this
                 // is the only place a cause survives. A wallet that says "that didn't go through"
                 // with the reason nowhere on record is undebuggable in the field as well as here.
+                NSLog("lark: %@ failed: %@", name, "\(error)")
+                onResult(nil, "\(error)")
+            }
+        }
+    }
+
+    /// `perform` for a call whose success value may legitimately be nothing.
+    ///
+    /// `perform` spends nil on "this failed", so it cannot express an answer that is both
+    /// successful and absent. The exit delta is exactly that: a wallet with no reachable Ark
+    /// server has no delta to report, and that is the normal case for unilateral exit rather than
+    /// an error. Both still arrive at the caller as nil — the distinction that matters is only
+    /// that the failure path logs a cause and this one does not invent one.
+    private func performOptional<T>(
+        _ onResult: @escaping (T?, String?) -> Void,
+        name: String = #function,
+        _ body: @escaping (LarkWallet) async throws -> T?
+    ) {
+        guard let wallet = currentWallet else {
+            onResult(nil, Self.notOpenMessage)
+            return
+        }
+        Task.detached {
+            do {
+                onResult(try await body(wallet), nil)
+            } catch {
                 NSLog("lark: %@ failed: %@", name, "\(error)")
                 onResult(nil, "\(error)")
             }

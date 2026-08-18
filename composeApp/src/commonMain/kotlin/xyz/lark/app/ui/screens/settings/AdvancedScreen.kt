@@ -118,7 +118,7 @@ fun AdvancedScreen(
             dotColorHex = model.health.dotColorHex,
         )
         Spacer(modifier = Modifier.height(SectionGap))
-        ActionButtons(onRefresh = machine::runRefresh, onExit = { machine.push(Route.EXIT) })
+        ActionButtons(onRefresh = machine::runRefresh, onExit = machine::goExit)
         val demoHealth = model.demoHealth
         if (demoHealth != null) {
             DemoSection(options = demoHealth, onForce = machine::forceHealth)

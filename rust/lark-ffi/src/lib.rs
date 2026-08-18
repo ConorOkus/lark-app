@@ -11,6 +11,9 @@ mod backup;
 mod wallet;
 
 pub use wallet::LarkWallet;
+// Re-exported for the `exit-drill` binary, which drives the same wallet the FFI does rather than
+// a parallel implementation — a drill that proved a different code path would prove nothing.
+pub use wallet::{open_wallet, ExitStage, ExitStatusInfo, OnchainFeeQuote};
 
 uniffi::setup_scaffolding!();
 

@@ -319,10 +319,27 @@ class FundingWatcherTest {
     fun hidingTheBalanceHidesWhatIsArrivingToo() = runTest {
         val funding = FakeOnchainFunding(confirmed = MIN_BOARD / 2)
         val m = fundedMachine(funding) { 1_000L }
+        m.goDeposit()
         m.toggleBalance()
         val arriving = m.model.value.balance.arriving
         assertNotNull(arriving)
         assertEquals("••••", arriving.amount)
+    }
+
+    /**
+     * The counterpart to [neverBoardsWithoutBeingAsked]: money nobody asked for is not boarded, so
+     * it must not be described as though it were about to be.
+     *
+     * Exit proceeds are the case that matters. They land in the same on-chain wallet the watcher
+     * reads, nothing will ever board them, and telling their owner they can spend them "in a few
+     * minutes" is a wait with no end. The balance's split line names that money instead.
+     */
+    @Test
+    fun moneyNobodyAskedForIsNotOnItsWay() = runTest {
+        val m = fundedMachine(FakeOnchainFunding(confirmed = MIN_BOARD * 5)) { 1_000L }
+        advanceTimeBy(ticks(3, IDLE_TICK_MILLIS))
+        assertNull(m.model.value.balance.arriving)
+        assertNotNull(m.model.value.balance.split, "it is still the holder's money, and still shown")
     }
 
     @Test

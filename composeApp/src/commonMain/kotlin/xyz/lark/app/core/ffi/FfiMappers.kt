@@ -2,6 +2,10 @@
 
 package xyz.lark.app.core.ffi
 
+import xyz.lark.app.core.EXIT_STALL_THRESHOLD
+import xyz.lark.app.core.ExitStage
+import xyz.lark.app.core.ExitStallReason
+import xyz.lark.app.core.ExitStatus
 import xyz.lark.app.core.format.displayName
 import xyz.lark.app.core.format.initialOf
 import xyz.lark.app.core.format.relativeTimeLabel
@@ -17,6 +21,80 @@ import kotlin.time.Instant
  * and testable without a core or a device. The shared text helpers live in `core.format` precisely
  * so "2 hours ago" cannot mean two things depending on which engine is running.
  */
+
+/**
+ * Turn a reported exit into the seam's status, applying the app's stall policy.
+ *
+ * Null in means the pass could not be read at all, and null out leaves the caller's previous
+ * status standing. Mapping an unreadable pass to "not exiting" would drop the wallet out of the
+ * exiting state on a single dropped call — the one transition that must never happen by accident.
+ */
+internal fun FfiExitStatus?.toExitStatus(consecutiveFailures: Int): ExitStatus? {
+    val reported = this ?: return null
+    val stage = reported.stage.toExitStage()
+    return ExitStatus(
+        stage = stage,
+        vtxoCount = reported.vtxoCount,
+        claimedCount = reported.claimedCount,
+        // Nothing is in flight once everything is claimed, whatever the exit set still sums to.
+        inFlightSats = if (stage == ExitStage.CLAIMED) 0L else reported.totalSat,
+        landedSats = reported.landedSat,
+        claimFeeSats = reported.claimFeeSat,
+        stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD,
+        // The engine's message deliberately does not cross: `errors` holds VTXO ids and the
+        // engine's own wording, and the seam's reason is what a headline renders.
+        reason = reported.stallCategory?.toExitStallReason(),
+        claimableAtHeight = reported.claimableAtHeight,
+    )
+}
+
+/**
+ * The status to report when a progress pass could not be read at all.
+ *
+ * Keeps the last known stage and amounts — nothing about the exit changed, only our ability to ask
+ * — but lets the app's stall policy apply. Without this a pass that fails outright is dropped and
+ * the previous status stands, so a wallet whose every pass fails counts failures forever and never
+ * says so: the exit sits on a stage name with no explanation and no way for the holder to learn
+ * there is one.
+ *
+ * The reason is [ExitStallReason.UNKNOWN] because that is what is known. A failed call carries no
+ * category from the engine, and picking a plausible-sounding one — an unreachable chain, say —
+ * would be inventing a cause from an absence of information.
+ */
+internal fun ExitStatus.afterUnreadablePass(consecutiveFailures: Int): ExitStatus {
+    val stalled = consecutiveFailures >= EXIT_STALL_THRESHOLD
+    return copy(
+        stalled = stalled,
+        reason = if (stalled) reason ?: ExitStallReason.UNKNOWN else reason,
+    )
+}
+
+/**
+ * The crate's stall categories in the app's vocabulary.
+ *
+ * A missing category maps to [ExitStallReason.UNKNOWN] rather than to null: the caller only asks
+ * for a reason once a pass has already failed, so "failed but no category" is an engine this build
+ * predates, not an absence of trouble.
+ */
+internal fun FfiExitStallCategory.toExitStallReason(): ExitStallReason = when (this) {
+    FfiExitStallCategory.CHAIN_UNREACHABLE -> ExitStallReason.CHAIN_UNREACHABLE
+    FfiExitStallCategory.INSUFFICIENT_FUNDS -> ExitStallReason.NEEDS_ONCHAIN_FUNDS
+    FfiExitStallCategory.UNECONOMIC -> ExitStallReason.NOT_ECONOMIC
+    FfiExitStallCategory.BROADCAST_REJECTED -> ExitStallReason.BROADCAST_REJECTED
+    FfiExitStallCategory.UNEXPECTED -> ExitStallReason.UNKNOWN
+}
+
+/** The crate's stage names in the app's vocabulary — same order, words a user could read. */
+internal fun FfiExitStage.toExitStage(): ExitStage = when (this) {
+    FfiExitStage.NONE -> ExitStage.NONE
+    FfiExitStage.START -> ExitStage.STARTING
+    FfiExitStage.PROCESSING -> ExitStage.BROADCASTING
+    FfiExitStage.AWAITING_DELTA -> ExitStage.WAITING_OUT_DELAY
+    FfiExitStage.CLAIMABLE -> ExitStage.CLAIMABLE
+    FfiExitStage.CLAIM_IN_PROGRESS -> ExitStage.CLAIMING
+    FfiExitStage.CLAIMED -> ExitStage.CLAIMED
+    FfiExitStage.UNSUPPORTED -> ExitStage.UNSUPPORTED
+}
 
 /** A movement that failed or was cancelled is not part of the money timeline. */
 private val ACTIVITY_STATUSES = setOf(FfiMovementState.PENDING, FfiMovementState.SUCCESSFUL)

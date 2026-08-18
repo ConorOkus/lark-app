@@ -91,8 +91,7 @@ fun DepositScreen(
                 modifier = Modifier.padding(top = TitleTopPadding, bottom = TitleBottomPadding),
             )
             Text(
-                text = "Send at least ${deposit.minLabel}. " +
-                    "It takes a few minutes before you can spend it.",
+                text = deposit.explainer,
                 style = LarkTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 24.sp),
                 color = LarkColors.TextSecondary,
             )
