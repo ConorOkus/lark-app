@@ -35,9 +35,10 @@ import xyz.lark.app.ui.components.OutlinePillButton
 import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
+import xyz.lark.app.ui.theme.belowStatusBar
 
 /** Shared metrics of the get-paid `sc-if` block (`padding:56px 20px 40px`). */
-private val ReceiveTopPadding: Dp = 56.dp
+private val ReceiveTopPadding: Dp = 56.dp.belowStatusBar()
 private val ReceiveHorizontalPadding: Dp = 20.dp
 private val ReceiveBottomPadding: Dp = 40.dp
 

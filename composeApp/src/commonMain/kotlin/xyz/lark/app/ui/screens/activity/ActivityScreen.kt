@@ -25,8 +25,9 @@ import xyz.lark.app.ui.components.clickableNoRipple
 import xyz.lark.app.ui.theme.LarkColors
 import xyz.lark.app.ui.theme.LarkTheme
 import xyz.lark.app.ui.theme.TABULAR_NUMERALS
+import xyz.lark.app.ui.theme.belowStatusBar
 
-private val ScreenTopPadding = 56.dp
+private val ScreenTopPadding = 56.dp.belowStatusBar()
 private val TitleHorizontalPadding = 20.dp
 private val TitleTopPadding = 20.dp
 private val TitleBottomPadding = 12.dp
