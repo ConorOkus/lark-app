@@ -112,11 +112,13 @@ class FfiHostLibraryTest {
     }
 
     /**
-     * The chain-source surface is exactly the three endpoints [StubEsplora] answers.
+     * The chain-source surface is exactly what [StubEsplora] answers, and nothing more.
      *
-     * [StubEsplora] 404s everything else, so if a crate or fork bump starts needing a fourth
-     * endpoint this test fails here — rather than the per-PR lane quietly starting to depend on
-     * reaching the real internet.
+     * [StubEsplora] 404s everything else, so a crate or fork bump that starts needing another
+     * endpoint fails here — rather than the per-PR lane quietly starting to reach the real
+     * internet. That is not hypothetical: this test is what caught wallet creation growing a full
+     * scan, which needs `/blocks` and a sweep of `/scripthash/…/txs` that creation never used to
+     * touch.
      */
     @Test
     fun theChainSourceSurfaceIsOnlyTheStubbedEndpoints() = runBlocking {
@@ -178,18 +180,22 @@ class FfiHostLibraryTest {
     }
 
     /**
-     * Incremental on-chain sync needs a **fourth** esplora endpoint — `/blocks` — so it cannot run
-     * on the hermetic lane.
+     * An on-chain sync runs inside the stubbed surface, and finds nothing.
      *
-     * Measured, not assumed: without this pinned, the natural expectation is that the three
-     * endpoints covering wallet creation also cover a sync, and the funding flow's dependency on a
-     * real chain source would only surface on a device. Verifying that a sync actually *finds*
-     * money stays live-lane work (the faucet → board smoke); what belongs here is the shape of the
-     * dependency. Serving `/blocks` from [StubEsplora] would mean fabricating a block chain bdk
-     * accepts, which pins fiction rather than behaviour.
+     * This used to assert the opposite — that a sync needed a fourth endpoint the stub refused to
+     * serve, on the reasoning that fabricating a chain bdk accepts would pin fiction rather than
+     * behaviour. That reasoning stopped being available when wallet *creation* grew a full scan:
+     * the lane cannot open a wallet at all without `/blocks`, so the choice is no longer whether to
+     * stub it.
+     *
+     * The fabricated header is not load-bearing, which is what makes it tolerable. `/blocks` exists
+     * so bdk can anchor transactions it finds, and a wallet created here finds none — every
+     * scripthash page is empty by construction. Whether a sync actually *finds* money stays live
+     * work (the faucet → board smoke); what belongs here is that it completes and reports zero
+     * rather than erroring.
      */
     @Test
-    fun onchainSyncNeedsAChainEndpointTheStubDoesNotCover() = runBlocking {
+    fun anOnchainSyncRunsWithinTheStubbedSurfaceAndFindsNothing() = runBlocking {
         requireHostLibrary()
         StubEsplora.start().use { esplora ->
             withDatadir { datadir ->
@@ -200,15 +206,14 @@ class FfiHostLibraryTest {
                     esplora = esplora.baseUrl,
                     words = uniffi.lark_ffi.generateMnemonic(WORD_COUNT),
                 ).use { wallet ->
-                    assertTrue(
-                        runCatching { wallet.onchainSync() }.isFailure,
-                        "onchain_sync must not appear to succeed without a full chain source",
-                    )
+                    wallet.onchainSync()
+                    val onchain = wallet.onchainBalance()
+                    assertEquals(0uL, onchain.totalSat, "a wallet with no history holds nothing")
                 }
                 assertEquals(
-                    listOf(ESPLORA_RECENT_BLOCKS_PATH),
+                    emptyList(),
                     esplora.unknownPathsRequested,
-                    "the endpoint an onchain sync adds beyond wallet creation's three",
+                    "a sync must stay inside the stubbed surface",
                 )
             }
         }
@@ -301,6 +306,5 @@ class FfiHostLibraryTest {
         const val SIGNET_TAPROOT_PREFIX = "tb1p"
 
         /** esplora's recent-blocks listing, which an incremental onchain sync reads. */
-        const val ESPLORA_RECENT_BLOCKS_PATH = "/blocks"
     }
 }
