@@ -106,6 +106,22 @@ class FfiHostLibraryTest {
                         runCatching { wallet.mintAddress() }.isFailure,
                         "mint_address must not appear to succeed without an Ark server",
                     )
+
+                    // The round schedule is the server's own, not the chain's. Pinned here because
+                    // the Advanced row it feeds renders an em-dash on failure: an export that
+                    // started answering from somewhere else would turn that honest unknown into a
+                    // confident wrong number, and nothing else in the hermetic lane would notice.
+                    assertTrue(
+                        runCatching { wallet.nextRoundTime() }.isFailure,
+                        "next_round_time must not appear to succeed without an Ark server",
+                    )
+
+                    // Reconnecting has nothing to reconnect to, and must say so. A success here
+                    // would mean the poll loop's recovery path reports a connection it never made.
+                    assertTrue(
+                        runCatching { wallet.reconnectArk() }.isFailure,
+                        "reconnect_ark must not report success without a reachable Ark server",
+                    )
                 }
             }
         }

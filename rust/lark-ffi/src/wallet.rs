@@ -650,8 +650,9 @@ fn epoch_seconds(at: std::time::SystemTime) -> Result<u64, LarkError> {
     at.duration_since(std::time::UNIX_EPOCH)
         .map(|since_epoch| since_epoch.as_secs())
         // Only reachable if the server names an instant before 1970, which is a broken server
-        // rather than an unreachable one. Invalid rather than Wallet so the caller does not treat
-        // it as the ordinary offline case and retry it forever.
+        // rather than an unreachable one — classified as invalid input for that reason. The
+        // platform seam currently discards the error kind, so this changes nothing about retries;
+        // it is a claim about what happened, not an instruction to the caller.
         .map_err(|e| LarkError::Invalid { msg: format!("next round time precedes the epoch: {e}") })
 }
 
