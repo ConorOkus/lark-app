@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.blockExpiryLabel
+import xyz.lark.app.core.format.roundCountdownLabel
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
@@ -47,8 +48,19 @@ private const val DEMO_SATS_PER_CENT = 10L
 /** captaind's board minimum on the team stack; see [DelegateBackedLarkCore.minBoardSats]. */
 private const val MIN_BOARD_SATS = 20_000L
 
+/** The Ark round schedule arrives in seconds; the injected wall clock is in millis. */
+private const val MILLIS_PER_SECOND = 1_000L
+
 /** How often the poll loop re-reads wallet state once the wallet is open. */
 private val DEFAULT_POLL_INTERVAL = 15.seconds
+
+/**
+ * Bound on one server round trip taken inside a poll cycle; see [awaitServerValue].
+ *
+ * Comfortably under [DEFAULT_POLL_INTERVAL] so a timing-out call cannot let one cycle overrun the
+ * next, and well above any healthy round trip to captaind.
+ */
+private val SERVER_CALL_TIMEOUT = 5.seconds
 
 /**
  * Run the engine's maintenance pass every Nth poll cycle — at the default cadence, about once a
@@ -155,6 +167,16 @@ class DelegateBackedLarkCore(
      * failed read leaves the previous value standing instead of blanking the countdown.
      */
     private var tipHeight: Long? = null
+
+    /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * Stored as the server's instant rather than as a rendered countdown so the label is computed
+     * fresh on every read: the poll interval is long enough that a duration captured here would be
+     * visibly stale on screen. Refetched only once the stored instant has passed — a round schedule
+     * does not move, so re-asking before then would spend a round trip to learn what we know.
+     */
+    private var nextRoundEpochSeconds: Long? = null
 
     override val walletExists: StateFlow<Boolean> = walletExistsFlow.asStateFlow()
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
@@ -421,12 +443,22 @@ class DelegateBackedLarkCore(
         delegate.awaitValue<Long> { onResult -> chainTip(onResult) }?.let { tipHeight = it }
     }
 
+    /** The injected wall clock in the unit the Ark server's round schedule speaks. */
+    private fun nowEpochSeconds(): Long = tuning.wallClockMillis() / MILLIS_PER_SECOND
+
     private suspend fun pollOnce() = pollMutex.withLock {
         val balance = delegate.awaitValue { onResult -> balanceSats(onResult) }
         if (balance == null) {
             // A failed read is a reachability signal, not a zero balance: leaving the last known
             // number in place beats showing ₿0 to someone who has money.
             healthFlow.value = HealthState.OFFLINE
+            // The round schedule is the exception to that rule, because it is the one cached value
+            // that decays into a false statement rather than a stale one. This early return skips
+            // the refresh below, so without clearing it here a countdown would keep ticking down
+            // past zero on a cycle that read nothing at all. Note this branch is NOT the offline
+            // case: a failed *local* balance read is a much stranger fault than an unreachable
+            // server, and captaind being down never reaches it.
+            nextRoundEpochSeconds = null
             return@withLock
         }
         balanceFlow.value = balance
@@ -441,9 +473,29 @@ class DelegateBackedLarkCore(
             depositAddressCache = delegate.awaitValue { onResult -> depositAddress(onResult) }
         }
         if (receiveCodeCache == null) {
+            // No code yet is the one piece of evidence available here that the wallet may have
+            // opened without an Ark server — the open is deliberately tolerant of a server that
+            // does not answer, and nothing reconnects on its own afterwards. Reconnecting first
+            // is what stops a wallet opened during an outage from having no receive code (and no
+            // way to send) for the whole life of the process. It is a no-op round trip when the
+            // connection is already up, and mint is still attempted if it fails: the reconnect is
+            // an attempt to help, never a gate on the call that actually matters.
+            delegate.awaitServerDone { onDone -> reconnectArk(onDone) }
             // Needs a reachable Ark server, so it is retried on later cycles rather than once.
             receiveCodeCache = delegate.awaitValue { onResult -> mintAddress(onResult) }
                 ?.let { address -> arkReceiveUri(address) }
+        }
+        // Only once the last known round time has passed, so the steady state costs no round trip.
+        //
+        // The result is assigned unconditionally, which is what makes an outage read as unknown.
+        // Keeping the old instant on failure looks like the conservative choice and is the opposite
+        // of one: this branch is only reached once that instant is already in the past, so a failed
+        // refresh would pin the row to "any moment now" for as long as the server stays away —
+        // stating that a round is imminent on the evidence of a call that just failed. The balance
+        // read above cannot cover for this, because it is served from the local VTXO database and
+        // succeeds happily while captaind is unreachable.
+        if (nextRoundEpochSeconds.let { it == null || it <= nowEpochSeconds() }) {
+            nextRoundEpochSeconds = delegate.awaitServerValue { onResult -> nextRoundTime(onResult) }
         }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
         // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
@@ -470,7 +522,9 @@ class DelegateBackedLarkCore(
         ),
         network = NetworkStats(
             arkServerStatus = healthFlow.value.display.aspStatus,
-            nextRound = PLACEHOLDER,
+            // Computed at read time, not at fetch time, so the countdown is current on every render
+            // rather than as old as the last poll.
+            nextRound = roundCountdownLabel(nextRoundEpochSeconds, tuning.wallClockMillis()),
             lightningBridge = PLACEHOLDER,
             chainTip = tipHeight?.takeIf { it > 0 },
         ),
@@ -531,6 +585,28 @@ private suspend fun <T> LarkCoreDelegate.awaitValue(
 ): T? = suspendCancellableCoroutine { continuation ->
     call { value, _ -> continuation.resume(value) }
 }
+
+/**
+ * [awaitValue] for a call that leaves the device, bounded by [SERVER_CALL_TIMEOUT].
+ *
+ * The whole poll body runs under one mutex, and the transport's own request timeout is ten minutes
+ * — long enough that a server which accepts a connection and then goes quiet would hold that mutex
+ * for the rest of the user's session, blocking every later cycle *and* the pull-to-refresh that
+ * shares it, while the health dot keeps reporting the READY it was assigned earlier in the same
+ * pass. A timeout is what keeps a wedged server a stale row instead of a frozen wallet.
+ *
+ * The abandoned call is not cancelled on the platform side — nothing here can reach into a detached
+ * Swift task — so it runs on harmlessly and its answer is discarded. That is the trade: an ignored
+ * reply costs nothing, a held mutex costs everything after it.
+ */
+private suspend fun <T> LarkCoreDelegate.awaitServerValue(
+    call: LarkCoreDelegate.((T?, String?) -> Unit) -> Unit,
+): T? = withTimeoutOrNull(SERVER_CALL_TIMEOUT) { awaitValue(call) }
+
+/** [awaitDone] for a call that leaves the device; a timeout reads as the failure it is. */
+private suspend fun LarkCoreDelegate.awaitServerDone(
+    call: LarkCoreDelegate.((String?) -> Unit) -> Unit,
+): Boolean = withTimeoutOrNull(SERVER_CALL_TIMEOUT) { awaitDone(call) } == true
 
 /** Runs an effect-only delegate call and suspends until it reports. True when it worked. */
 private suspend fun LarkCoreDelegate.awaitDone(

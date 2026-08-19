@@ -65,6 +65,15 @@ interface LarkCoreDelegate {
     /** Wallet maintenance: sync, register boards, refresh VTXOs that are near expiry. */
     fun refresh(onDone: (error: String?) -> Unit)
 
+    /**
+     * Re-establish the Ark server connection when the wallet has none.
+     *
+     * The wallet opens whether or not the server answers, so one that opened during an outage has
+     * no connection and no way of its own to get one — every server-side op fails until the
+     * process restarts. This is the retry; failing is ordinary and means "still unreachable".
+     */
+    fun reconnectArk(onDone: (error: String?) -> Unit)
+
     /** A fresh Ark receive address. Needs a reachable Ark server. */
     fun mintAddress(onResult: (address: String?, error: String?) -> Unit)
 
@@ -117,6 +126,15 @@ interface LarkCoreDelegate {
      * from a fresh one.
      */
     fun chainTip(onResult: (height: Long?, error: String?) -> Unit)
+
+    /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * The server's schedule, so it needs a reachable server and a failure is the ordinary offline
+     * case — the caller shows an unknown rather than retrying hard. An absolute instant rather than
+     * a remaining duration so one fetch can render a fresh countdown until it is refetched.
+     */
+    fun nextRoundTime(onResult: (epochSeconds: Long?, error: String?) -> Unit)
 
     /**
      * Begin a unilateral exit for the whole VTXO set.

@@ -282,6 +282,7 @@ class AppStateMachine constructor(
     private var receiveCodeJob: Job? = null
     private var fundingWatcherJob: Job? = null
     private var exitWatcherJob: Job? = null
+    private var roundTickerJob: Job? = null
 
     init {
         // A wallet that already exists may be carrying a deposit the user asked for before they
@@ -968,6 +969,35 @@ class AppStateMachine constructor(
     private fun update(transform: (MachineState) -> MachineState) {
         state = transform(state)
         modelFlow.value = render(state)
+        syncRoundTicker()
+    }
+
+    /**
+     * Runs a one-second re-render exactly while Advanced is on screen.
+     *
+     * Every other figure in the app changes only when the wallet does, so a core emission is enough
+     * to keep it current. Advanced's round countdown is the exception: it is derived from the clock,
+     * so between wallet events it goes stale while being looked at — the row froze at whatever it
+     * said when the screen opened, which is a worse lie than the em-dash it replaced.
+     *
+     * Driven from [update] because that is the one funnel every navigation passes through, so the
+     * ticker cannot outlive the screen. Re-entrant by construction: the tick calls [update], which
+     * calls this again and finds the job already running. [render] is pure and StateFlow drops an
+     * equal model, so a tick that changes no label costs a render and emits nothing.
+     */
+    private fun syncRoundTicker() {
+        if (state.route != Route.ADVANCED) {
+            roundTickerJob?.cancel()
+            roundTickerJob = null
+            return
+        }
+        if (roundTickerJob?.isActive == true) return
+        roundTickerJob = scope.launch {
+            while (true) {
+                delay(ONE_SECOND_MILLIS)
+                update { it }
+            }
+        }
     }
 
     private fun restingRoute(): Route = if (core.walletExists.value) Route.HOME else Route.WELCOME
@@ -1319,6 +1349,11 @@ class AppStateMachine constructor(
      * QR and the code box always show the same live string (the one-source rule).
      */
     private fun renderReceive(s: MachineState): ReceiveModel = ReceiveModel(
+        // A blank answer counts as no answer, at both levels. A core asked for a code before it
+        // had minted an address returns "", and treating that as a real value would pin Get paid
+        // blank even after a later poll produced a usable code; a core that has never reached the
+        // Ark server returns "" forever, and that has to surface as no code rather than as an
+        // empty one the screen would draw a QR of.
         // A blank answer counts as no answer: a core asked for a code before it had minted an
         // address returns "", and treating that as a real value would pin Get paid blank even
         // after a later poll produced a usable code.

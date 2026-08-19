@@ -59,8 +59,14 @@ internal fun elapsedLabel(millis: Long): String =
 
 private const val MILLIS_PER_SECOND = 1_000L
 
-/** The unit choice, split out so the label above stays a single expression. */
-private fun spelled(seconds: Long): String = when {
+/**
+ * The unit choice, split out so the label above stays a single expression.
+ *
+ * Internal rather than private because [roundCountdownLabel] needs the same ladder for waits of a
+ * minute or more; duplicating it there is how two countdowns in one screen end up phrased
+ * differently.
+ */
+internal fun spelled(seconds: Long): String = when {
     seconds < SECONDS_PER_HOUR -> counted(maxOf(1L, seconds / SECONDS_PER_MINUTE), "minute")
     seconds < SECONDS_PER_DAY -> counted(maxOf(1L, seconds / SECONDS_PER_HOUR), "hour")
     else -> counted(seconds / SECONDS_PER_DAY, "day")

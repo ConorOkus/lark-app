@@ -781,6 +781,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -830,6 +834,8 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_movements(`ptr`: Pointer,
     ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_next_round_time(`ptr`: Pointer,
+    ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_send(`ptr`: Pointer,`address`: RustBuffer.ByValue,`sats`: Long,
@@ -839,6 +845,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_sync(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_progress_exit(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_reconnect_ark(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_refresh(`ptr`: Pointer,
     ): Long
@@ -1016,6 +1024,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_movements(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_next_round_time(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_send(
@@ -1025,6 +1035,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_sync(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_progress_exit(
+    ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_reconnect_ark(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_refresh(
     ): Short
@@ -1113,6 +1125,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_next_round_time() != 11565.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1126,6 +1141,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_progress_exit() != 37008.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_reconnect_ark() != 53388.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947.toShort()) {
@@ -1676,6 +1694,22 @@ public interface LarkWalletInterface {
     suspend fun `movements`(): List<MovementInfo>
     
     /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+    suspend fun `nextRoundTime`(): kotlin.ULong
+    
+    /**
      * The on-chain balance, split by confirmation state. Read-only — call
      * [`Self::onchain_sync`] first for a current answer.
      *
@@ -1731,6 +1765,24 @@ public interface LarkWalletInterface {
      * ordinary progress.
      */
     suspend fun `progressExit`(): ExitStatusInfo
+    
+    /**
+     * Re-establish the Ark server connection when the wallet does not have one.
+     *
+     * [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+     * usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+     * is that the connection is then made exactly once, at open. Nothing inside bark retries it
+     * — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+     * so a wallet opened during an outage stays server-less for the life of the process. Every
+     * server-side op keeps failing with "You should be connected to Ark server" long after the
+     * server is back, and the holder's only cure is to kill the app. This is the retry, driven
+     * by the platform's poll loop.
+     *
+     * Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+     * error while the server is still unreachable — which the caller reads as "try again next
+     * cycle", not as a wallet fault.
+     */
+    suspend fun `reconnectArk`()
     
     /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
@@ -2198,6 +2250,41 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
 
     
     /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `nextRoundTime`() : kotlin.ULong {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_next_round_time(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterULong.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
      * The on-chain balance, split by confirmation state. Read-only — call
      * [`Self::onchain_sync`] first for a current answer.
      *
@@ -2344,6 +2431,44 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
         { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeExitStatusInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Re-establish the Ark server connection when the wallet does not have one.
+     *
+     * [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+     * usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+     * is that the connection is then made exactly once, at open. Nothing inside bark retries it
+     * — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+     * so a wallet opened during an outage stays server-less for the life of the process. Every
+     * server-side op keeps failing with "You should be connected to Ark server" long after the
+     * server is back, and the holder's only cure is to kill the app. This is the retry, driven
+     * by the platform's poll loop.
+     *
+     * Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+     * error while the server is still unreachable — which the caller reads as "try again next
+     * cycle", not as a wallet fault.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `reconnectArk`() {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_reconnect_ark(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
         // Error FFI converter
         LarkException.ErrorHandler,
     )

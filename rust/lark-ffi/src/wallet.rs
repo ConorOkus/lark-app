@@ -194,6 +194,25 @@ impl LarkWallet {
         Ok(())
     }
 
+    /// Re-establish the Ark server connection when the wallet does not have one.
+    ///
+    /// [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+    /// usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+    /// is that the connection is then made exactly once, at open. Nothing inside bark retries it
+    /// — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+    /// so a wallet opened during an outage stays server-less for the life of the process. Every
+    /// server-side op keeps failing with "You should be connected to Ark server" long after the
+    /// server is back, and the holder's only cure is to kill the app. This is the retry, driven
+    /// by the platform's poll loop.
+    ///
+    /// Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+    /// error while the server is still unreachable — which the caller reads as "try again next
+    /// cycle", not as a wallet fault.
+    pub async fn reconnect_ark(&self) -> Result<(), LarkError> {
+        self.inner.refresh_server().await.map_err(LarkError::from)?;
+        Ok(())
+    }
+
     /// A fresh Ark receive address (the seam's `receiveCode` source). Requires a
     /// synced server connection — this exercises a real captaind round-trip.
     pub async fn mint_address(&self) -> Result<String, LarkError> {
@@ -251,6 +270,23 @@ impl LarkWallet {
     /// minute stale costs nothing against a countdown measured in days.
     pub async fn chain_tip(&self) -> Result<u32, LarkError> {
         self.inner.chain.tip().await.map_err(LarkError::from)
+    }
+
+    /// When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+    ///
+    /// An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+    /// interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+    /// so a duration computed here would be visibly stale by the time it is read; an instant can be
+    /// turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+    /// arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+    /// clock the tests can control.
+    ///
+    /// Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+    /// here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+    /// a fabricated countdown would be worse than an admitted unknown.
+    pub async fn next_round_time(&self) -> Result<u64, LarkError> {
+        let at = self.inner.next_round_start_time().await.map_err(LarkError::from)?;
+        epoch_seconds(at)
     }
 
     /// The on-chain balance, split by confirmation state. Read-only — call
@@ -602,6 +638,24 @@ fn parse_onchain_address(address: &str, network: Network) -> Result<Address, Lar
         .map_err(|_| LarkError::Invalid { msg: format!("that address is not valid on {network}") })
 }
 
+/// A server-supplied instant as the UNIX seconds the FFI boundary can carry.
+///
+/// A free function for the same reason as [`parse_onchain_address`] — `SystemTime` has no FFI
+/// representation — and split out from [`LarkWallet::next_round_time`] so the conversion is
+/// reachable by tests that need no wallet and no server.
+///
+/// Truncates rather than rounds: the caller renders whole seconds, and rounding up would put a
+/// countdown one second beyond what the server said.
+fn epoch_seconds(at: std::time::SystemTime) -> Result<u64, LarkError> {
+    at.duration_since(std::time::UNIX_EPOCH)
+        .map(|since_epoch| since_epoch.as_secs())
+        // Only reachable if the server names an instant before 1970, which is a broken server
+        // rather than an unreachable one — classified as invalid input for that reason. The
+        // platform seam currently discards the error kind, so this changes nothing about retries;
+        // it is a claim about what happened, not an instruction to the caller.
+        .map_err(|e| LarkError::Invalid { msg: format!("next round time precedes the epoch: {e}") })
+}
+
 /// What an on-chain send would cost, quoted before it is sent.
 ///
 /// `total_sat` is amount plus fee — the number that actually leaves the wallet — because that is
@@ -882,6 +936,36 @@ impl ExitStatusInfo {
             claim_fee_sat: claim.map(|c| c.fee_sat),
             claimable_at_height,
         }
+    }
+}
+
+#[cfg(test)]
+mod round_time_tests {
+    use super::epoch_seconds;
+    use crate::LarkError;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn an_instant_becomes_its_unix_seconds_reading() {
+        let at = UNIX_EPOCH + Duration::from_secs(1_760_000_041);
+        assert_eq!(epoch_seconds(at).unwrap(), 1_760_000_041);
+    }
+
+    /// Sub-second precision is noise against a countdown rendered in whole seconds, and truncating
+    /// rather than rounding is what keeps the label from reading one second further out than the
+    /// server actually said.
+    #[test]
+    fn a_fractional_second_truncates_rather_than_rounding_up() {
+        let at = UNIX_EPOCH + Duration::from_millis(1_760_000_041_900);
+        assert_eq!(epoch_seconds(at).unwrap(), 1_760_000_041);
+    }
+
+    /// Only a broken server can produce this, which is why it must not be reported as a wallet or
+    /// connectivity fault: those are the two the caller retries, and retrying will never fix it.
+    #[test]
+    fn an_instant_before_the_epoch_is_invalid_rather_than_a_wallet_error() {
+        let at = UNIX_EPOCH - Duration::from_secs(1);
+        assert!(matches!(epoch_seconds(at), Err(LarkError::Invalid { .. })));
     }
 }
 
