@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.lark.app.core.LarkCore
 import xyz.lark.app.core.format.blockExpiryLabel
+import xyz.lark.app.core.format.roundCountdownLabel
 import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
@@ -46,6 +47,9 @@ private const val DEMO_SATS_PER_CENT = 10L
 
 /** captaind's board minimum on the team stack; see [DelegateBackedLarkCore.minBoardSats]. */
 private const val MIN_BOARD_SATS = 20_000L
+
+/** The Ark round schedule arrives in seconds; the injected wall clock is in millis. */
+private const val MILLIS_PER_SECOND = 1_000L
 
 /** How often the poll loop re-reads wallet state once the wallet is open. */
 private val DEFAULT_POLL_INTERVAL = 15.seconds
@@ -155,6 +159,16 @@ class DelegateBackedLarkCore(
      * failed read leaves the previous value standing instead of blanking the countdown.
      */
     private var tipHeight: Long? = null
+
+    /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * Stored as the server's instant rather than as a rendered countdown so the label is computed
+     * fresh on every read: the poll interval is long enough that a duration captured here would be
+     * visibly stale on screen. Refetched only once the stored instant has passed — a round schedule
+     * does not move, so re-asking before then would spend a round trip to learn what we know.
+     */
+    private var nextRoundEpochSeconds: Long? = null
 
     override val walletExists: StateFlow<Boolean> = walletExistsFlow.asStateFlow()
     override val balanceSats: StateFlow<Long> = balanceFlow.asStateFlow()
@@ -421,12 +435,20 @@ class DelegateBackedLarkCore(
         delegate.awaitValue<Long> { onResult -> chainTip(onResult) }?.let { tipHeight = it }
     }
 
+    /** The injected wall clock in the unit the Ark server's round schedule speaks. */
+    private fun nowEpochSeconds(): Long = tuning.wallClockMillis() / MILLIS_PER_SECOND
+
     private suspend fun pollOnce() = pollMutex.withLock {
         val balance = delegate.awaitValue { onResult -> balanceSats(onResult) }
         if (balance == null) {
             // A failed read is a reachability signal, not a zero balance: leaving the last known
             // number in place beats showing ₿0 to someone who has money.
             healthFlow.value = HealthState.OFFLINE
+            // The round schedule is the exception to that rule, because it is the one cached value
+            // that decays into a false statement rather than a stale one: a round time we cannot
+            // refresh is already in the past within a minute, and "any moment now" forever is a
+            // promise an unreachable server is not making. Unknown is the honest reading.
+            nextRoundEpochSeconds = null
             return@withLock
         }
         balanceFlow.value = balance
@@ -453,6 +475,13 @@ class DelegateBackedLarkCore(
             receiveCodeCache = delegate.awaitValue { onResult -> mintAddress(onResult) }
                 ?.let { address -> arkReceiveUri(address) }
         }
+        // Only once the last known round time has passed, so the steady state costs no round trip.
+        // A failure leaves the stale instant in place: it renders as "any moment now", which is the
+        // truth about a round that was due and whose successor the server will not tell us about.
+        if (nextRoundEpochSeconds.let { it == null || it <= nowEpochSeconds() }) {
+            delegate.awaitValue<Long> { onResult -> nextRoundTime(onResult) }
+                ?.let { nextRoundEpochSeconds = it }
+        }
         onchain = delegate.awaitValue { onResult -> onchainBalance(onResult) }
         // A local read, so it belongs on the fast cadence: it is what makes the VTXO count and the
         // expiry deadline visible at all, and it costs nothing to keep current.
@@ -478,7 +507,9 @@ class DelegateBackedLarkCore(
         ),
         network = NetworkStats(
             arkServerStatus = healthFlow.value.display.aspStatus,
-            nextRound = PLACEHOLDER,
+            // Computed at read time, not at fetch time, so the countdown is current on every render
+            // rather than as old as the last poll.
+            nextRound = roundCountdownLabel(nextRoundEpochSeconds, tuning.wallClockMillis()),
             lightningBridge = PLACEHOLDER,
             chainTip = tipHeight?.takeIf { it > 0 },
         ),

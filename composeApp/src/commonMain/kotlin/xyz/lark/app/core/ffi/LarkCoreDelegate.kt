@@ -128,6 +128,15 @@ interface LarkCoreDelegate {
     fun chainTip(onResult: (height: Long?, error: String?) -> Unit)
 
     /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * The server's schedule, so it needs a reachable server and a failure is the ordinary offline
+     * case — the caller shows an unknown rather than retrying hard. An absolute instant rather than
+     * a remaining duration so one fetch can render a fresh countdown until it is refetched.
+     */
+    fun nextRoundTime(onResult: (epochSeconds: Long?, error: String?) -> Unit)
+
+    /**
      * Begin a unilateral exit for the whole VTXO set.
      *
      * Needs no Ark server, which is the entire point — an implementation must not gate it on one

@@ -783,6 +783,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -831,6 +833,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_mint_address(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_movements(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_next_round_time(`ptr`: Pointer,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_onchain_balance(`ptr`: Pointer,
     ): Long
@@ -1020,6 +1024,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_movements(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_next_round_time(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_onchain_send(
@@ -1117,6 +1123,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_next_round_time() != 11565.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804.toShort()) {
@@ -1685,6 +1694,22 @@ public interface LarkWalletInterface {
     suspend fun `movements`(): List<MovementInfo>
     
     /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+    suspend fun `nextRoundTime`(): kotlin.ULong
+    
+    /**
      * The on-chain balance, split by confirmation state. Read-only — call
      * [`Self::onchain_sync`] first for a current answer.
      *
@@ -2218,6 +2243,41 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
         { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterSequenceTypeMovementInfo.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `nextRoundTime`() : kotlin.ULong {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_next_round_time(
+                thisPtr,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_u64(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_u64(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_u64(future) },
+        // lift function
+        { FfiConverterULong.lift(it) },
         // Error FFI converter
         LarkException.ErrorHandler,
     )

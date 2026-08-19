@@ -155,6 +155,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in KotlinLong(value: Int64(try await wallet.chainTip())) }
     }
 
+    func nextRoundTime(onResult: @escaping (KotlinLong?, String?) -> Void) {
+        perform(onResult) { wallet in KotlinLong(value: Int64(try await wallet.nextRoundTime())) }
+    }
+
     // MARK: - Writes
 
     func refresh(onDone: @escaping (String?) -> Void) {

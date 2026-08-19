@@ -638,6 +638,22 @@ public protocol LarkWalletProtocol : AnyObject {
     func movements() async throws  -> [MovementInfo]
     
     /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+    func nextRoundTime() async throws  -> UInt64
+    
+    /**
      * The on-chain balance, split by confirmation state. Read-only — call
      * [`Self::onchain_sync`] first for a current answer.
      *
@@ -1084,6 +1100,37 @@ open func movements()async throws  -> [MovementInfo] {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeMovementInfo.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * When the Ark server expects to start its next round, as a UNIX timestamp in seconds.
+     *
+     * An absolute instant rather than a remaining duration, deliberately. The caller polls on an
+     * interval measured in seconds-to-tens-of-seconds while a round interval is around a minute,
+     * so a duration computed here would be visibly stale by the time it is read; an instant can be
+     * turned into a fresh countdown at every render from one fetch. It also keeps the one piece of
+     * arithmetic that can be wrong — now versus then — on the side of the boundary that has a
+     * clock the tests can control.
+     *
+     * Needs a reachable Ark server (the schedule is the server's, not the chain's), so an error
+     * here is the ordinary offline case and the caller reads it as "no answer yet", never as zero:
+     * a fabricated countdown would be worse than an admitted unknown.
+     */
+open func nextRoundTime()async throws  -> UInt64 {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_next_round_time(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_u64,
+            completeFunc: ffi_lark_ffi_rust_future_complete_u64,
+            freeFunc: ffi_lark_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -2832,6 +2879,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_next_round_time() != 11565) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_onchain_balance() != 22804) {
