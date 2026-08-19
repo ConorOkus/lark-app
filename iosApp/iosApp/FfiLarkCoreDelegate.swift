@@ -124,6 +124,10 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in try await wallet.mintAddress() }
     }
 
+    func reconnectArk(onDone: @escaping (String?) -> Void) {
+        performVoid(onDone) { wallet in try await wallet.reconnectArk() }
+    }
+
     func onchainBalance(onResult: @escaping (FfiOnchainBalance?, String?) -> Void) {
         perform(onResult) { wallet in
             let balance = try await wallet.onchainBalance()

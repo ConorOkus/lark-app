@@ -695,6 +695,24 @@ public protocol LarkWalletProtocol : AnyObject {
     func progressExit() async throws  -> ExitStatusInfo
     
     /**
+     * Re-establish the Ark server connection when the wallet does not have one.
+     *
+     * [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+     * usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+     * is that the connection is then made exactly once, at open. Nothing inside bark retries it
+     * — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+     * so a wallet opened during an outage stays server-less for the life of the process. Every
+     * server-side op keeps failing with "You should be connected to Ark server" long after the
+     * server is back, and the holder's only cure is to kill the app. This is the retry, driven
+     * by the platform's poll loop.
+     *
+     * Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+     * error while the server is still unreachable — which the caller reads as "try again next
+     * cycle", not as a wallet fault.
+     */
+    func reconnectArk() async throws 
+    
+    /**
      * Run wallet maintenance (the seam's `refresh`): sync + housekeeping.
      */
     func refresh() async throws 
@@ -1198,6 +1216,39 @@ open func progressExit()async throws  -> ExitStatusInfo {
             completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeExitStatusInfo.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Re-establish the Ark server connection when the wallet does not have one.
+     *
+     * [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+     * usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+     * is that the connection is then made exactly once, at open. Nothing inside bark retries it
+     * — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+     * so a wallet opened during an outage stays server-less for the life of the process. Every
+     * server-side op keeps failing with "You should be connected to Ark server" long after the
+     * server is back, and the holder's only cure is to kill the app. This is the retry, driven
+     * by the platform's poll loop.
+     *
+     * Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+     * error while the server is still unreachable — which the caller reads as "try again next
+     * cycle", not as a wallet fault.
+     */
+open func reconnectArk()async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_reconnect_ark(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_void,
+            completeFunc: ffi_lark_ffi_rust_future_complete_void,
+            freeFunc: ffi_lark_ffi_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeLarkError.lift
         )
 }
@@ -2796,6 +2847,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_progress_exit() != 37008) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_reconnect_ark() != 53388) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_refresh() != 17947) {

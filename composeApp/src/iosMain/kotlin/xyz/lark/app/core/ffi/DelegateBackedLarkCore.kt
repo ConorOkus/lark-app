@@ -441,6 +441,14 @@ class DelegateBackedLarkCore(
             depositAddressCache = delegate.awaitValue { onResult -> depositAddress(onResult) }
         }
         if (receiveCodeCache == null) {
+            // No code yet is the one piece of evidence available here that the wallet may have
+            // opened without an Ark server — the open is deliberately tolerant of a server that
+            // does not answer, and nothing reconnects on its own afterwards. Reconnecting first
+            // is what stops a wallet opened during an outage from having no receive code (and no
+            // way to send) for the whole life of the process. It is a no-op round trip when the
+            // connection is already up, and mint is still attempted if it fails: the reconnect is
+            // an attempt to help, never a gate on the call that actually matters.
+            delegate.awaitDone { onDone -> reconnectArk(onDone) }
             // Needs a reachable Ark server, so it is retried on later cycles rather than once.
             receiveCodeCache = delegate.awaitValue { onResult -> mintAddress(onResult) }
                 ?.let { address -> arkReceiveUri(address) }

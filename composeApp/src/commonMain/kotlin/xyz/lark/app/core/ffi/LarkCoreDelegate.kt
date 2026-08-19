@@ -65,6 +65,15 @@ interface LarkCoreDelegate {
     /** Wallet maintenance: sync, register boards, refresh VTXOs that are near expiry. */
     fun refresh(onDone: (error: String?) -> Unit)
 
+    /**
+     * Re-establish the Ark server connection when the wallet has none.
+     *
+     * The wallet opens whether or not the server answers, so one that opened during an outage has
+     * no connection and no way of its own to get one — every server-side op fails until the
+     * process restarts. This is the retry; failing is ordinary and means "still unreachable".
+     */
+    fun reconnectArk(onDone: (error: String?) -> Unit)
+
     /** A fresh Ark receive address. Needs a reachable Ark server. */
     fun mintAddress(onResult: (address: String?, error: String?) -> Unit)
 

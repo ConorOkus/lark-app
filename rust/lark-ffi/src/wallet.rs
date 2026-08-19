@@ -194,6 +194,25 @@ impl LarkWallet {
         Ok(())
     }
 
+    /// Re-establish the Ark server connection when the wallet does not have one.
+    ///
+    /// [`open_wallet`] is deliberately server-tolerant: a failed handshake leaves the wallet
+    /// usable offline, which is what lets a unilateral exit run while captaind is down. The cost
+    /// is that the connection is then made exactly once, at open. Nothing inside bark retries it
+    /// — `Wallet::refresh_server` exists for this, and barkd's daemon loop is its only caller —
+    /// so a wallet opened during an outage stays server-less for the life of the process. Every
+    /// server-side op keeps failing with "You should be connected to Ark server" long after the
+    /// server is back, and the holder's only cure is to kill the app. This is the retry, driven
+    /// by the platform's poll loop.
+    ///
+    /// Cheap when the connection is already up (a handshake and an ark-info round trip), and an
+    /// error while the server is still unreachable — which the caller reads as "try again next
+    /// cycle", not as a wallet fault.
+    pub async fn reconnect_ark(&self) -> Result<(), LarkError> {
+        self.inner.refresh_server().await.map_err(LarkError::from)?;
+        Ok(())
+    }
+
     /// A fresh Ark receive address (the seam's `receiveCode` source). Requires a
     /// synced server connection — this exercises a real captaind round-trip.
     pub async fn mint_address(&self) -> Result<String, LarkError> {
