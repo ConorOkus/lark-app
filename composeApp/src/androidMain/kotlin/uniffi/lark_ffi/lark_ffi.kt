@@ -785,6 +785,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -831,6 +833,8 @@ internal interface UniffiLib : Library {
     fun uniffi_lark_ffi_fn_method_larkwallet_fingerprint(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_lark_ffi_fn_method_larkwallet_mint_address(`ptr`: Pointer,
+    ): Long
+    fun uniffi_lark_ffi_fn_method_larkwallet_mint_bolt11_invoice(`ptr`: Pointer,`sats`: Long,
     ): Long
     fun uniffi_lark_ffi_fn_method_larkwallet_movements(`ptr`: Pointer,
     ): Long
@@ -1022,6 +1026,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_mint_address(
     ): Short
+    fun uniffi_lark_ffi_checksum_method_larkwallet_mint_bolt11_invoice(
+    ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_movements(
     ): Short
     fun uniffi_lark_ffi_checksum_method_larkwallet_next_round_time(
@@ -1120,6 +1126,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_mint_address() != 18162.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_lark_ffi_checksum_method_larkwallet_mint_bolt11_invoice() != 1212.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690.toShort()) {
@@ -1683,6 +1692,22 @@ public interface LarkWalletInterface {
     suspend fun `mintAddress`(): kotlin.String
     
     /**
+     * Mint a BOLT11 invoice for `sats`, payable from any Lightning wallet (the
+     * receive counterpart to [`Self::send_bolt11`]).
+     *
+     * The Ark server takes the incoming HTLC and hands the value over as VTXOs,
+     * so this needs no channel of our own and no inbound liquidity — and no
+     * balance at all, which is what lets a wallet holding nothing be funded
+     * this way. Claiming is not done here: it happens in the maintenance pass
+     * [`Self::refresh`] already runs.
+     *
+     * A zero amount is refused locally rather than asked about — the server has
+     * nothing useful to say about an invoice for nothing, and the round trip
+     * would leave a pending receive behind.
+     */
+    suspend fun `mintBolt11Invoice`(`sats`: kotlin.ULong): kotlin.String
+    
+    /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
      *
      * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
@@ -2206,6 +2231,41 @@ open class LarkWallet: Disposable, AutoCloseable, LarkWalletInterface {
             UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_mint_address(
                 thisPtr,
                 
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterString.lift(it) },
+        // Error FFI converter
+        LarkException.ErrorHandler,
+    )
+    }
+
+    
+    /**
+     * Mint a BOLT11 invoice for `sats`, payable from any Lightning wallet (the
+     * receive counterpart to [`Self::send_bolt11`]).
+     *
+     * The Ark server takes the incoming HTLC and hands the value over as VTXOs,
+     * so this needs no channel of our own and no inbound liquidity — and no
+     * balance at all, which is what lets a wallet holding nothing be funded
+     * this way. Claiming is not done here: it happens in the maintenance pass
+     * [`Self::refresh`] already runs.
+     *
+     * A zero amount is refused locally rather than asked about — the server has
+     * nothing useful to say about an invoice for nothing, and the round trip
+     * would leave a pending receive behind.
+     */
+    @Throws(LarkException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `mintBolt11Invoice`(`sats`: kotlin.ULong) : kotlin.String {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_lark_ffi_fn_method_larkwallet_mint_bolt11_invoice(
+                thisPtr,
+                FfiConverterULong.lower(`sats`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_lark_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
