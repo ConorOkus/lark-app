@@ -67,6 +67,10 @@ The verification lane that runs on every change: the real in-process wallet exer
 
 Because it must run everywhere, it skips itself when its native library cannot load. On a lane that is supposed to prove the wallet works, that skip is required to become a failure instead — otherwise a green run asserts nothing.
 
+The library it loads is a build artifact the build system neither produces nor tracks, so a run that executes every assertion may still have exercised an earlier build of the core. Running this lane is therefore two steps rather than one — rebuild, then test — which is the order the automated pipeline uses by construction and a local run has to reproduce deliberately.
+
+Its coverage boundary is an enumeration rather than a property the lane derives: which wallet operations need a signing counterparty and which are answerable locally is written down by hand, so an operation newly added to the wallet's surface sits outside the lane until someone classifies it. A green run means every operation anyone listed still behaves as listed — never that everything the wallet can now do was checked.
+
 ### Live lane
 The opt-in verification lane that runs against real infrastructure, covering the money-bearing behavior the pure-local lane cannot: a funded balance and a successful spend. It is gated off by default and skips visibly rather than passing silently, so a routine run never implies coverage it did not provide.
 
