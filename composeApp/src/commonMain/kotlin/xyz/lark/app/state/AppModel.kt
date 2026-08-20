@@ -159,7 +159,15 @@ data class BackupModel(
 
 /** Get-paid screen: the one code plus the copy-flip state. */
 data class ReceiveModel(
-    val code: String,
+    /**
+     * The one receive code, or null when the wallet has not managed to mint one yet — minting
+     * needs a reachable Ark server, and a server-less wallet has nothing to show.
+     *
+     * Null rather than empty for the same reason [requestedAmount] is: an empty code still
+     * renders as a scannable QR, and a QR that resolves to nothing is indistinguishable from a
+     * payable one until someone has already tried to pay it.
+     */
+    val code: String?,
     val copied: Boolean,
     val copyLabel: String,
     /**

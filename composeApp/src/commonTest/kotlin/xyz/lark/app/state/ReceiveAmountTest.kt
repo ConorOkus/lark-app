@@ -194,12 +194,27 @@ class ReceiveAmountTest {
 
         m.requestAmount("520")
         runCurrent()
-        assertEquals("", m.model.value.receive.code, "nothing minted yet, so there is no code")
+        assertNull(m.model.value.receive.code, "nothing minted yet, so there is no code")
 
         core.mint("bitcoin:?ark=ark1qf7late")
         m.go(Route.RECEIVE) // any re-render
 
         assertEquals("bitcoin:?ark=ark1qf7late", m.model.value.receive.code)
+    }
+
+    /**
+     * The case that shipped a QR of the empty string: a wallet that opened without reaching the
+     * Ark server never mints, so [LarkCore.receiveCode] stays "" for the whole session.
+     *
+     * That has to surface as no code at all. An empty string encodes to a valid, scannable QR, so
+     * rendering it gave the user a code to hand out that no payment could ever reach.
+     */
+    @Test
+    fun aCoreThatNeverMintsRendersNoCodeRatherThanAnEmptyOne() = runTest {
+        val m = machineWith(LateMintingCore()) // never told to mint
+        m.go(Route.RECEIVE)
+
+        assertNull(m.model.value.receive.code)
     }
 
     /** A core whose receive code only appears after a later poll, as the gateway's does. */

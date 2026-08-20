@@ -171,9 +171,8 @@ private fun PendingRoute(model: AppModel, machine: AppStateMachine) = PendingScr
 )
 
 /**
- * The DEPOSIT branch. Unlike the receive screen's Copy — which only flips a label — this writes the
- * address to the clipboard for real, because the next thing the user does with it is paste it into a
- * faucet or another wallet.
+ * The DEPOSIT branch: writes the address to the clipboard for real, because the next thing the user
+ * does with it is paste it into a faucet or another wallet.
  */
 @Composable
 private fun DepositRoute(deposit: DepositModel, machine: AppStateMachine) {
@@ -190,14 +189,30 @@ private fun DepositRoute(deposit: DepositModel, machine: AppStateMachine) {
     )
 }
 
-/** The RECEIVE branch: binds [ReceiveScreen]'s callbacks to the machine's intents. */
+/**
+ * The RECEIVE branch: binds [ReceiveScreen]'s callbacks to the machine's intents.
+ *
+ * Copy writes to the clipboard, like [DepositRoute]'s. It used to only flip the label to "Copied"
+ * while leaving the clipboard untouched — a claim the user has no way to doubt until the paste
+ * comes up empty in whatever wallet they were trying to get paid from.
+ */
 @Composable
-private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) = ReceiveScreen(
-    receive = model.receive,
-    onBack = machine::back,
-    onCopy = machine::copyCode,
-    onToggleAmount = machine::toggleReceiveAmount,
-)
+private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) {
+    val clipboard = LocalClipboardManager.current
+    ReceiveScreen(
+        receive = model.receive,
+        onBack = machine::back,
+        onCopy = {
+            // Guarded rather than assumed: the screen disables Copy without a code, and this is the
+            // half that must not write an empty clipboard if that ever stops being true.
+            model.receive.code?.let { code ->
+                clipboard.setText(AnnotatedString(code))
+                machine.copyCode()
+            }
+        },
+        onToggleAmount = machine::toggleReceiveAmount,
+    )
+}
 
 /** The BACKUP branch: binds [BackupScreen]'s callbacks to the machine's intents. */
 @Composable

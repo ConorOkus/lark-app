@@ -1354,10 +1354,7 @@ class AppStateMachine constructor(
         // blank even after a later poll produced a usable code; a core that has never reached the
         // Ark server returns "" forever, and that has to surface as no code rather than as an
         // empty one the screen would draw a QR of.
-        // A blank answer counts as no answer: a core asked for a code before it had minted an
-        // address returns "", and treating that as a real value would pin Get paid blank even
-        // after a later poll produced a usable code.
-        code = s.receiveCode?.takeIf { it.isNotEmpty() } ?: core.receiveCode,
+        code = s.receiveCode?.takeIf { it.isNotEmpty() } ?: core.receiveCode.takeIf { it.isNotEmpty() },
         copied = s.copied,
         copyLabel = if (s.copied) "Copied" else "Copy",
         requestedAmount = if (s.receiveRequestSats > 0L) primary(s.receiveRequestSats, s.denomination) else null,

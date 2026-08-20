@@ -98,10 +98,14 @@ fun ReceiveScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
         ) {
-            ReceiveQr(code = receive.code)
-            RequestedAmount(amount = receive.requestedAmount)
-            TextBlock()
-            CodeBox(code = receive.code)
+            if (receive.code == null) {
+                NoCodeYet()
+            } else {
+                ReceiveQr(code = receive.code)
+                RequestedAmount(amount = receive.requestedAmount)
+                TextBlock()
+                CodeBox(code = receive.code)
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = CtaTopGap),
@@ -111,6 +115,7 @@ fun ReceiveScreen(
                 text = receive.copyLabel,
                 onClick = onCopy,
                 modifier = Modifier.weight(1f),
+                enabled = receive.code != null,
                 height = CtaHeight,
             )
             GoldPillButton(
@@ -172,6 +177,61 @@ private fun RequestedAmount(amount: String?) {
         color = LarkColors.TextPrimary,
         textAlign = TextAlign.Center,
     )
+}
+
+/**
+ * What Get paid shows when there is no code: the QR card's own footprint left deliberately empty,
+ * under a headline that says so.
+ *
+ * The alternative — drawing the QR and the code box anyway — is what this replaces. An empty code
+ * still encodes to a perfectly scannable QR, so the screen was handing out a code that resolves to
+ * nothing and looked exactly like a working one. Saying "not yet" costs the user a wait; the QR
+ * cost them a payment that never arrived.
+ *
+ * The copy names no cause on purpose, which is why it reads as a wait rather than as a diagnosis.
+ * A missing code means "the wallet has not minted one yet" and nothing narrower: it is the ordinary
+ * state for the first seconds after an open, the state during an Ark outage, and the state when a
+ * gateway rejects the address it was handed. Naming one of those — the earlier "Can't reach the
+ * network" — asserted a cause this screen cannot see, and was simply wrong for the other two. The
+ * cause is not knowable here without carrying a reason down from the core, and the wallet header's
+ * status dot already tells a genuinely offline user what it can.
+ */
+@Composable
+private fun NoCodeYet() {
+    Box(
+        modifier = Modifier
+            .size(QrSize + QrCardPadding * 2)
+            .clip(RoundedCornerShape(QrCardRadius))
+            .background(LarkColors.Surface)
+            .border(width = 1.dp, color = LarkColors.Border, shape = RoundedCornerShape(QrCardRadius)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "No code yet",
+            style = LarkTheme.typography.itemTitle.copy(fontSize = 16.sp, lineHeight = 20.sp),
+            color = LarkColors.TextTertiary,
+            textAlign = TextAlign.Center,
+        )
+    }
+    Column(
+        modifier = Modifier.widthIn(max = TextBlockMaxWidth),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(TextBlockGap),
+    ) {
+        Text(
+            text = "Getting your code",
+            style = LarkTheme.typography.itemTitle.copy(fontSize = 18.sp, lineHeight = 23.sp),
+            color = LarkColors.TextPrimary,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = "LARK needs the network to make your code. It keeps trying, and your code " +
+                "appears here as soon as it’s ready.",
+            style = LarkTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
+            color = LarkColors.TextTertiary,
+            textAlign = TextAlign.Center,
+        )
+    }
 }
 
 /** "One code, any wallet" headline and its 14sp explainer, centered, max 300dp wide. */
