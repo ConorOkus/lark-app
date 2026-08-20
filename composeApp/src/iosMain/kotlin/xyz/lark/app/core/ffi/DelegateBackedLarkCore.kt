@@ -20,11 +20,11 @@ import xyz.lark.app.core.EXIT_STALL_THRESHOLD
 import xyz.lark.app.core.ExitReceipt
 import xyz.lark.app.core.ExitStage
 import xyz.lark.app.core.ExitStatus
+import xyz.lark.app.core.CachedInvoice
 import xyz.lark.app.core.OnchainFunding
 import xyz.lark.app.core.OnchainSend
 import xyz.lark.app.core.OnchainSendQuote
 import xyz.lark.app.core.WalletExit
-import xyz.lark.app.core.CachedInvoice
 import xyz.lark.app.core.receiveCodeFor
 import xyz.lark.app.core.reusableInvoice
 import xyz.lark.app.core.gateway.arkReceiveUri
@@ -477,11 +477,6 @@ class DelegateBackedLarkCore(
             nextRoundEpochSeconds = null
             return@withLock
         }
-        // A balance that rose means something arrived, possibly the very invoice being cached.
-        // Serving a settled invoice again would hand out a destination the payer's wallet
-        // refuses, and the wallet cannot ask whether one specific receive settled — so the cache
-        // is dropped rather than reasoned about. Re-minting costs one round trip.
-        if (balance > balanceFlow.value) mintedInvoice = null
         balanceFlow.value = balance
         healthFlow.value = HealthState.READY
 
@@ -577,9 +572,11 @@ class DelegateBackedLarkCore(
 
     /** The invoice for [sats]: the one already minted for that amount, or a freshly minted one. */
     private suspend fun invoiceFor(sats: Long): String? = mintMutex.withLock {
-        reusableInvoice(mintedInvoice, sats, nowEpochSeconds(), MINTED_INVOICE_REUSE_SECONDS)
+        val now = nowEpochSeconds()
+        val balance = balanceFlow.value
+        reusableInvoice(mintedInvoice, sats, balance, now, MINTED_INVOICE_REUSE_SECONDS)
             ?: delegate.awaitValue { onResult -> mintBolt11Invoice(sats, onResult) }
-                ?.also { mintedInvoice = CachedInvoice(sats, it, nowEpochSeconds()) }
+                ?.also { mintedInvoice = CachedInvoice(sats, it, now, balance) }
     }
 
     override suspend fun send(recipient: String, sats: Long): SendResult {

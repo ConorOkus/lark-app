@@ -55,6 +55,37 @@ class ReceiveCodeDecisionTest {
     }
 
     @Test
+    fun anInvoiceForADifferentAmountIsNeverCarried() {
+        // Get paid states the requested amount right beside this code, so an invoice asking for
+        // another figure would make the app promise a number it is not requesting. Same refusal
+        // the send path makes when an invoice disagrees with the reviewed amount.
+        assertEquals(ARK_URI, receiveCodeFor(ARK_URI, SATS, "lnbc60u1p3xyzabc"))
+        assertEquals(ARK_URI, receiveCodeFor(ARK_URI, SATS, "lnbc40u1p3xyzabc"))
+    }
+
+    @Test
+    fun anAmountlessInvoiceIsNeverCarriedForAnAmountAsk() {
+        // The payer would choose the figure, which is not what the holder asked for.
+        assertEquals(ARK_URI, receiveCodeFor(ARK_URI, SATS, "lnbc1p3xyzabc"))
+    }
+
+    @Test
+    fun anInvoiceWhoseAmountCannotBeReadIsNeverCarried() {
+        // Unreadable is a mismatch, not a maybe: carrying it would stake the screen's promise on
+        // a figure nothing verified.
+        assertEquals(ARK_URI, receiveCodeFor(ARK_URI, SATS, "notaninvoiceatall"))
+        assertEquals(ARK_URI, receiveCodeFor(ARK_URI, SATS, "lnxyz50u1p3abc"))
+    }
+
+    @Test
+    fun theMutinynetPrefixTheAppActuallyShipsIsCarried() {
+        // The wallet runs on mutinynet, so production invoices carry signet's `tbs` prefix. The
+        // amount check must not quietly reject every real invoice by only understanding mainnet.
+        val signet = "lntbs50u1p3xyzabc"
+        assertEquals("$ARK_URI&lightning=$signet", receiveCodeFor(ARK_URI, SATS, signet))
+    }
+
+    @Test
     fun theCodeNeverCarriesMoreThanOneLightningDestination() {
         val code = receiveCodeFor(ARK_URI, SATS, INVOICE)
         assertEquals(1, code.split("lightning=").size - 1, "exactly one lightning destination")
@@ -73,35 +104,54 @@ class ReceiveCodeDecisionTest {
     fun anInvoiceIsReusedForTheSameAmountInsideTheWindow() {
         // Reuse is what stops a holder adjusting an amount from leaving a trail of live invoices
         // the server holds and every maintenance pass tries to claim.
-        val cached = CachedInvoice(sats = SATS, bolt11 = INVOICE, mintedAtEpochSeconds = MINTED_AT)
-        assertEquals(INVOICE, reusableInvoice(cached, SATS, MINTED_AT + 1, WINDOW))
+        assertEquals(INVOICE, reusableInvoice(cached(), SATS, BALANCE, MINTED_AT + 1, WINDOW))
     }
 
     @Test
     fun anInvoiceIsNeverReusedForADifferentAmount() {
         // An invoice names its own amount, so serving one for another figure would ask the payer
         // for money the holder never requested.
-        val cached = CachedInvoice(sats = SATS, bolt11 = INVOICE, mintedAtEpochSeconds = MINTED_AT)
-        assertNull(reusableInvoice(cached, SATS + 1, MINTED_AT + 1, WINDOW))
+        assertNull(reusableInvoice(cached(), SATS + 1, BALANCE, MINTED_AT + 1, WINDOW))
+    }
+
+    @Test
+    fun anInvoiceIsNeverReusedOnceTheBalanceHasMoved() {
+        // The balance may have moved *because this invoice was paid*, and a settled invoice is a
+        // destination the payer's wallet refuses. The wallet cannot ask whether one specific
+        // receive settled, so any movement is enough to stop reusing it.
+        assertNull(reusableInvoice(cached(), SATS, BALANCE + SATS, MINTED_AT + 1, WINDOW))
+        // Including downward: a send is not this invoice settling, but re-minting costs one round
+        // trip and guessing wrong costs an unpayable code.
+        assertNull(reusableInvoice(cached(), SATS, BALANCE - 1, MINTED_AT + 1, WINDOW))
     }
 
     @Test
     fun anInvoiceIsNotReusedOnceTheWindowHasPassed() {
-        val cached = CachedInvoice(sats = SATS, bolt11 = INVOICE, mintedAtEpochSeconds = MINTED_AT)
-        assertNull(reusableInvoice(cached, SATS, MINTED_AT + WINDOW, WINDOW), "the boundary is exclusive")
-        assertTrue(reusableInvoice(cached, SATS, MINTED_AT + WINDOW - 1, WINDOW) != null)
+        assertNull(
+            reusableInvoice(cached(), SATS, BALANCE, MINTED_AT + WINDOW, WINDOW),
+            "the boundary is exclusive",
+        )
+        assertTrue(reusableInvoice(cached(), SATS, BALANCE, MINTED_AT + WINDOW - 1, WINDOW) != null)
     }
 
     @Test
     fun nothingCachedMeansNothingToReuse() {
-        assertNull(reusableInvoice(null, SATS, MINTED_AT, WINDOW))
+        assertNull(reusableInvoice(null, SATS, BALANCE, MINTED_AT, WINDOW))
     }
+
+    private fun cached() = CachedInvoice(
+        sats = SATS,
+        bolt11 = INVOICE,
+        mintedAtEpochSeconds = MINTED_AT,
+        balanceAtMintSats = BALANCE,
+    )
 
     private companion object {
         const val ARK_URI = "bitcoin:?ark=tark1q2v9lfmk"
         const val INVOICE = "lnbc50u1p3xyzabc"
         const val SATS = 5_000L
         const val MINTED_AT = 1_700_000_000L
+        const val BALANCE = 12_000L
         const val WINDOW = 600L
     }
 }
