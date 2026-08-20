@@ -8,6 +8,7 @@ import xyz.lark.app.core.FakeLarkCore
 import xyz.lark.app.core.LarkCore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -217,12 +218,71 @@ class ReceiveAmountTest {
         assertNull(m.model.value.receive.code)
     }
 
+    // --- Asking again for a code that never came ---
+
+    /**
+     * The retry runs the poll cycle that mints, and leaves the user on Get paid.
+     *
+     * The screen-level point: `runRefresh` — the app's other retry — routes through SENDING and
+     * lands on home, which would take Get paid away from someone standing on it waiting.
+     */
+    @Test
+    fun retryingRefreshesTheCoreWithoutLeavingGetPaid() = runTest {
+        val core = LateMintingCore()
+        val m = machineWith(core)
+        m.go(Route.RECEIVE)
+
+        m.retryReceiveCode()
+        runCurrent()
+
+        assertEquals(1, core.refreshes, "the retry is a poll cycle, which is what mints")
+        assertEquals(Route.RECEIVE, m.model.value.route)
+    }
+
+    /** A code that lands on the retry's own cycle reaches the screen. */
+    @Test
+    fun aCodeMintedByTheRetryShowsUp() = runTest {
+        val core = LateMintingCore()
+        val m = machineWith(core)
+        m.go(Route.RECEIVE)
+        assertNull(m.model.value.receive.code)
+
+        core.mint("bitcoin:?ark=ark1qf7retry")
+        m.retryReceiveCode()
+        runCurrent()
+
+        assertEquals("bitcoin:?ark=ark1qf7retry", m.model.value.receive.code)
+        assertFalse(m.model.value.receive.retrying, "and the affordance is live again")
+    }
+
+    /** A second tap while one is in flight must not queue another cycle behind it. */
+    @Test
+    fun retryingIsQuietWhileOneIsAlreadyRunning() = runTest {
+        val core = LateMintingCore()
+        val m = machineWith(core)
+        m.go(Route.RECEIVE)
+
+        m.retryReceiveCode()
+        assertTrue(m.model.value.receive.retrying)
+        m.retryReceiveCode()
+        runCurrent()
+
+        assertEquals(1, core.refreshes)
+    }
+
     /** A core whose receive code only appears after a later poll, as the gateway's does. */
     private class LateMintingCore(
         private val fake: FakeLarkCore = FakeLarkCore(startWithWallet = true),
     ) : LarkCore by fake {
         private var minted: String = ""
+        var refreshes = 0
+            private set
+
         override val receiveCode: String get() = minted
+
+        override suspend fun refresh() {
+            refreshes++
+        }
 
         fun mint(code: String) {
             minted = code
@@ -244,6 +304,58 @@ class ReceiveAmountTest {
         assertEquals("Copied", m.model.value.receive.copyLabel)
         assertEquals("${core.receiveCode}&lightning=lntbs520invoice", m.model.value.receive.code)
     }
+
+    // --- The funding route that needs nothing on-chain (U6) ---
+
+    @Test
+    fun theLightningFundingRouteOpensTheAmountKeypadInReceiveMode() = runTest {
+        val core = RecordingReceiveCore()
+        val m = machineWith(core)
+
+        m.goFundOverLightning()
+        runCurrent()
+
+        // Straight to the amount, because a Lightning destination cannot exist until someone has
+        // said how much — the ask is the first half of the gesture, not friction before it.
+        assertEquals(Route.AMOUNT, m.model.value.route)
+        assertTrue(core.asked.isEmpty(), "nothing is minted before an amount exists")
+    }
+
+    @Test
+    fun confirmingTheAmountFromTheFundingRouteLandsOnGetPaidWithAPayableCode() = runTest {
+        val core = RecordingReceiveCore()
+        val m = machineWith(core)
+
+        m.goFundOverLightning()
+        "5000".forEach { m.keyPress(it) }
+        m.keypadConfirm()
+        runCurrent()
+
+        // Get paid, not back to the funding screen: the holder came here for a code, so landing
+        // anywhere the code is not would strand the whole route.
+        assertEquals(Route.RECEIVE, m.model.value.route)
+        assertEquals(listOf(5_000L), core.asked)
+        assertTrue(
+            m.model.value.receive.code?.contains("lightning=") == true,
+            "the code a first-run holder shows must carry a Lightning destination",
+        )
+    }
+
+    @Test
+    fun leavingTheFundingRouteWithoutAnAmountStillLandsSomewhereCoherent() = runTest {
+        val core = RecordingReceiveCore()
+        val m = machineWith(core)
+
+        m.goFundOverLightning()
+        m.back()
+        runCurrent()
+
+        // Get paid with the amountless code, and no half-finished ask left behind.
+        assertEquals(Route.RECEIVE, m.model.value.route)
+        assertNull(m.model.value.receive.requestedAmount)
+        assertTrue(core.asked.isEmpty())
+    }
+
 }
 
 /** Types each digit of [digits] on the keypad. */

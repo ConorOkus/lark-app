@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import io.github.alexzhirkevich.qrose.rememberQrCodePainter
 import xyz.lark.app.state.ReceiveModel
 import xyz.lark.app.ui.components.GoldPillButton
+import xyz.lark.app.ui.components.GoldSpinner
 import xyz.lark.app.ui.components.OutlinePillButton
 import xyz.lark.app.ui.components.ScreenBackButton
 import xyz.lark.app.ui.theme.LarkColors
@@ -63,7 +64,18 @@ private val QrCardRadius = 28.dp
 private val QrCardPadding = 18.dp
 private val QrSize = 246.dp
 
+/** The waiting spinner, sized between the 44dp default and the QR card it stands in for. */
+private val WaitingSpinnerSize = 52.dp
+
 private const val CODE_TEXT_ALPHA = 0.6f
+
+/** What Get paid can do, bundled so the screen keeps a short parameter list. */
+data class ReceiveActions(
+    val onBack: () -> Unit,
+    val onCopy: () -> Unit,
+    val onToggleAmount: () -> Unit,
+    val onRetry: () -> Unit,
+)
 
 /**
  * Get paid (spec block `data-screen-label="Get paid"`): back chevron + centered title,
@@ -73,9 +85,7 @@ private const val CODE_TEXT_ALPHA = 0.6f
 @Composable
 fun ReceiveScreen(
     receive: ReceiveModel,
-    onBack: () -> Unit,
-    onCopy: () -> Unit,
-    onToggleAmount: () -> Unit,
+    actions: ReceiveActions,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -88,7 +98,7 @@ fun ReceiveScreen(
                 bottom = ReceiveBottomPadding,
             ),
     ) {
-        TopRow(onBack = onBack)
+        TopRow(onBack = actions.onBack)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -99,7 +109,7 @@ fun ReceiveScreen(
             verticalArrangement = Arrangement.spacedBy(CenterGap, Alignment.CenterVertically),
         ) {
             if (receive.code == null) {
-                NoCodeYet()
+                WaitingForCode()
             } else {
                 ReceiveQr(code = receive.code)
                 RequestedAmount(amount = receive.requestedAmount)
@@ -107,23 +117,34 @@ fun ReceiveScreen(
                 CodeBox(code = receive.code)
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = CtaTopGap),
-            horizontalArrangement = Arrangement.spacedBy(CtaGap),
-        ) {
-            OutlinePillButton(
-                text = receive.copyLabel,
-                onClick = onCopy,
-                modifier = Modifier.weight(1f),
-                enabled = receive.code != null,
-                height = CtaHeight,
-            )
+        // Without a code both ordinary actions are dead — there is nothing to copy and no code for
+        // an amount to annotate — so the row gives way to the one action that can change anything.
+        if (receive.code == null) {
             GoldPillButton(
-                text = if (receive.requestedAmount == null) "Set amount" else "Any amount",
-                onClick = onToggleAmount,
-                modifier = Modifier.weight(1f),
+                text = "Try again now",
+                onClick = actions.onRetry,
+                modifier = Modifier.fillMaxWidth().padding(top = CtaTopGap),
+                enabled = !receive.retrying,
                 height = CtaHeight,
             )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = CtaTopGap),
+                horizontalArrangement = Arrangement.spacedBy(CtaGap),
+            ) {
+                OutlinePillButton(
+                    text = receive.copyLabel,
+                    onClick = actions.onCopy,
+                    modifier = Modifier.weight(1f),
+                    height = CtaHeight,
+                )
+                GoldPillButton(
+                    text = if (receive.requestedAmount == null) "Set amount" else "Any amount",
+                    onClick = actions.onToggleAmount,
+                    modifier = Modifier.weight(1f),
+                    height = CtaHeight,
+                )
+            }
         }
     }
 }
@@ -180,39 +201,20 @@ private fun RequestedAmount(amount: String?) {
 }
 
 /**
- * What Get paid shows when there is no code: the QR card's own footprint left deliberately empty,
- * under a headline that says so.
+ * What Get paid shows before the wallet has a code: the spinner, and what it is waiting on.
  *
- * The alternative — drawing the QR and the code box anyway — is what this replaces. An empty code
- * still encodes to a perfectly scannable QR, so the screen was handing out a code that resolves to
- * nothing and looked exactly like a working one. Saying "not yet" costs the user a wait; the QR
- * cost them a payment that never arrived.
+ * It replaces a QR of the empty string. An empty code still encodes to a perfectly scannable QR,
+ * so the screen used to hand out a code that resolved to nothing and looked exactly like a working
+ * one — a payment aimed at it simply never arrived.
  *
- * The copy names no cause on purpose, which is why it reads as a wait rather than as a diagnosis.
- * A missing code means "the wallet has not minted one yet" and nothing narrower: it is the ordinary
- * state for the first seconds after an open, the state during an Ark outage, and the state when a
- * gateway rejects the address it was handed. Naming one of those — the earlier "Can't reach the
- * network" — asserted a cause this screen cannot see, and was simply wrong for the other two. The
- * cause is not knowable here without carrying a reason down from the core, and the wallet header's
- * status dot already tells a genuinely offline user what it can.
+ * Deliberately says what it is doing and not why it is failing. The one fact available here is
+ * that there is no code and the wallet keeps asking; whether the network is down, slow, or three
+ * seconds into a cold start is not something this screen knows, and a "can't reach the network"
+ * headline would be a guess dressed as a diagnosis on a fresh launch.
  */
 @Composable
-private fun NoCodeYet() {
-    Box(
-        modifier = Modifier
-            .size(QrSize + QrCardPadding * 2)
-            .clip(RoundedCornerShape(QrCardRadius))
-            .background(LarkColors.Surface)
-            .border(width = 1.dp, color = LarkColors.Border, shape = RoundedCornerShape(QrCardRadius)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "No code yet",
-            style = LarkTheme.typography.itemTitle.copy(fontSize = 16.sp, lineHeight = 20.sp),
-            color = LarkColors.TextTertiary,
-            textAlign = TextAlign.Center,
-        )
-    }
+private fun WaitingForCode() {
+    GoldSpinner(size = WaitingSpinnerSize)
     Column(
         modifier = Modifier.widthIn(max = TextBlockMaxWidth),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -225,8 +227,8 @@ private fun NoCodeYet() {
             textAlign = TextAlign.Center,
         )
         Text(
-            text = "LARK needs the network to make your code. It keeps trying, and your code " +
-                "appears here as soon as it’s ready.",
+            text = "This needs the network. LARK keeps trying, and your code appears here the " +
+                "moment it lands.",
             style = LarkTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
             color = LarkColors.TextTertiary,
             textAlign = TextAlign.Center,

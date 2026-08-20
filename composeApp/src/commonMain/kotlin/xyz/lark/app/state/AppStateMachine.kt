@@ -158,6 +158,8 @@ private data class MachineState(
      * suspending call and rendering must stay pure — null falls back to the core's own code.
      */
     val receiveCode: String? = null,
+    /** A hand-asked retry for the receive code is in flight; the affordance goes quiet until it ends. */
+    val receiveRetrying: Boolean = false,
     /** The paste affordance came back empty; the summary line says so instead of no-op'ing. */
     val pasteFailed: Boolean = false,
     /**
@@ -280,6 +282,7 @@ class AppStateMachine constructor(
     private var countdownJob: Job? = null
     private var copyJob: Job? = null
     private var receiveCodeJob: Job? = null
+    private var receiveRetryJob: Job? = null
     private var fundingWatcherJob: Job? = null
     private var exitWatcherJob: Job? = null
     private var roundTickerJob: Job? = null
@@ -518,6 +521,22 @@ class AppStateMachine constructor(
         fundingWatcherJob = null
     }
 
+    /**
+     * The funding route that needs nothing on-chain: open Get paid, then go straight to the
+     * amount.
+     *
+     * The amount step is not skippable and not a wait — a Lightning destination cannot exist
+     * until someone has said how much, so asking is the first half of the gesture rather than
+     * friction in front of it. Confirming the amount pops back to Get paid, where the code is.
+     *
+     * The wallet already exists here: [goFund] creates it on the way in, because the fund screen
+     * cannot show anything without one.
+     */
+    fun goFundOverLightning() {
+        go(Route.RECEIVE)
+        goReceiveAmount()
+    }
+
     /** Completing onboarding ("Later" on fund, or leaving the deposit screen) lands home. */
     fun finishOnboarding() {
         core.createWallet()
@@ -600,6 +619,29 @@ class AppStateMachine constructor(
             val code = core.requestReceiveCode(sats)
             // A later request (or a clear) wins: only apply while this amount is still the ask.
             update { if (it.receiveRequestSats == sats) it.copy(receiveCode = code) else it }
+        }
+    }
+
+    /**
+     * Ask again for a receive code the wallet has not managed to mint, without leaving Get paid.
+     *
+     * Deliberately not [runRefresh]: that one routes through SENDING and lands on home, which
+     * would take the screen away from the person standing on it waiting for a code to appear.
+     * The work is the same — a poll cycle, which is what reconnects and mints — only the
+     * navigation differs.
+     */
+    fun retryReceiveCode() {
+        if (state.receiveRetrying) return
+        update { it.copy(receiveRetrying = true) }
+        receiveRetryJob?.cancel()
+        receiveRetryJob = scope.launch {
+            try {
+                core.refresh()
+            } finally {
+                // In a finally so a cancelled or failed refresh cannot strand the affordance
+                // disabled — the one outcome that would leave no way to ask again.
+                update { it.copy(receiveRetrying = false) }
+            }
         }
     }
 
@@ -1358,6 +1400,7 @@ class AppStateMachine constructor(
         copied = s.copied,
         copyLabel = if (s.copied) "Copied" else "Copy",
         requestedAmount = if (s.receiveRequestSats > 0L) primary(s.receiveRequestSats, s.denomination) else null,
+        retrying = s.receiveRetrying,
     )
 
     private fun renderDemoHealth(): List<DemoHealthOption>? {

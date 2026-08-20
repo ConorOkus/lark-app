@@ -39,6 +39,7 @@ import xyz.lark.app.ui.screens.pay.SendInputScreen
 import xyz.lark.app.ui.screens.pay.SendingScreen
 import xyz.lark.app.ui.screens.pay.PendingScreen
 import xyz.lark.app.ui.screens.pay.SentScreen
+import xyz.lark.app.ui.screens.receive.ReceiveActions
 import xyz.lark.app.ui.screens.receive.ReceiveScreen
 import xyz.lark.app.ui.screens.settings.AdvancedScreen
 import xyz.lark.app.ui.screens.settings.BackupScreen
@@ -114,6 +115,7 @@ private fun ScreenHost(model: AppModel, machine: AppStateMachine) {
             )
             Route.FUND -> FundScreen(
                 onBack = machine::back,
+                onGetPaidOverLightning = machine::goFundOverLightning,
                 // Null for a core with no on-chain wallet (demo, gateway), which hides the card
                 // rather than offering a route to an address that leads nowhere.
                 onMoveBitcoinIn = if (model.deposit != null) machine::goDeposit else null,
@@ -201,16 +203,19 @@ private fun ReceiveRoute(model: AppModel, machine: AppStateMachine) {
     val clipboard = LocalClipboardManager.current
     ReceiveScreen(
         receive = model.receive,
-        onBack = machine::back,
-        onCopy = {
-            // Guarded rather than assumed: the screen disables Copy without a code, and this is the
-            // half that must not write an empty clipboard if that ever stops being true.
-            model.receive.code?.let { code ->
-                clipboard.setText(AnnotatedString(code))
-                machine.copyCode()
-            }
-        },
-        onToggleAmount = machine::toggleReceiveAmount,
+        actions = ReceiveActions(
+            onBack = machine::back,
+            onCopy = {
+                // Guarded rather than assumed: the screen disables Copy without a code, and this
+                // is the half that must not write an empty clipboard if that ever stops holding.
+                model.receive.code?.let { code ->
+                    clipboard.setText(AnnotatedString(code))
+                    machine.copyCode()
+                }
+            },
+            onToggleAmount = machine::toggleReceiveAmount,
+            onRetry = machine::retryReceiveCode,
+        ),
     )
 }
 
