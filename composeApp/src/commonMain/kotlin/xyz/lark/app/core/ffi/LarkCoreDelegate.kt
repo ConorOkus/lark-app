@@ -87,6 +87,16 @@ interface LarkCoreDelegate {
     fun sendBolt11(invoice: String, sats: Long, onResult: (summary: String?, error: String?) -> Unit)
 
     /**
+     * Mint a BOLT11 invoice for [sats], payable from any Lightning wallet.
+     *
+     * The receive counterpart to [sendBolt11]. The Ark server takes the incoming HTLC and hands
+     * the value over, so this needs no channel of our own and no balance — which is what lets a
+     * wallet holding nothing be funded this way. Claiming is the maintenance pass's job, not the
+     * caller's. A non-positive [sats] is refused rather than asked about.
+     */
+    fun mintBolt11Invoice(sats: Long, onResult: (invoice: String?, error: String?) -> Unit)
+
+    /**
      * Pay an Ark address out of round. The other half of send: the app's own receive code is an
      * Ark address, so this is what one lark wallet paying another actually uses.
      */

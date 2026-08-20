@@ -24,6 +24,9 @@ import xyz.lark.app.core.OnchainFunding
 import xyz.lark.app.core.OnchainSend
 import xyz.lark.app.core.OnchainSendQuote
 import xyz.lark.app.core.WalletExit
+import xyz.lark.app.core.CachedInvoice
+import xyz.lark.app.core.receiveCodeFor
+import xyz.lark.app.core.reusableInvoice
 import xyz.lark.app.core.gateway.arkReceiveUri
 import xyz.lark.app.core.model.AdvancedStats
 import xyz.lark.app.core.model.Contact
@@ -73,6 +76,16 @@ private val SERVER_CALL_TIMEOUT = 5.seconds
  * Onboarding promises "LARK keeps your wallet ready in the background" — this is that promise.
  */
 private const val MAINTENANCE_EVERY_N_CYCLES = 4
+
+/**
+ * How long a minted invoice is reused for the same requested amount.
+ *
+ * Deliberately far short of the server's own `invoice_expiry` (48h on our captaind): the window
+ * exists to stop a holder who adjusts the amount, backs out, and asks again from leaving a trail
+ * of live invoices the server must hold and every maintenance pass must try to claim. It is not
+ * an attempt to track how long the invoice stays payable, which is the server's business.
+ */
+private const val MINTED_INVOICE_REUSE_SECONDS = 600L
 
 /**
  * The in-process core's tunable knobs, grouped like `GatewayTuning` so the constructor stays short
@@ -142,6 +155,8 @@ class DelegateBackedLarkCore(
 
     /** Serializes send's check-then-pay so racing sends cannot jointly overdraw. */
     private val sendMutex = Mutex()
+    /** Serializes check-then-mint so two rapid asks for one amount cannot mint twice. */
+    private val mintMutex = Mutex()
 
     /** Conflated "poll now" signal; senders never block and repeats collapse into one cycle. */
     private val pollTrigger = Channel<Unit>(Channel.CONFLATED)
@@ -155,6 +170,7 @@ class DelegateBackedLarkCore(
     private var recentRows: List<Contact> = emptyList()
     private var words: List<String> = store.loadWords().orEmpty()
     private var receiveCodeCache: String? = null
+    private var mintedInvoice: CachedInvoice? = null
     private var depositAddressCache: String? = null
     private var onchain: FfiOnchainBalance? = null
     private var vtxos: FfiVtxoSummary? = null
@@ -461,6 +477,11 @@ class DelegateBackedLarkCore(
             nextRoundEpochSeconds = null
             return@withLock
         }
+        // A balance that rose means something arrived, possibly the very invoice being cached.
+        // Serving a settled invoice again would hand out a destination the payer's wallet
+        // refuses, and the wallet cannot ask whether one specific receive settled — so the cache
+        // is dropped rather than reasoned about. Re-minting costs one round trip.
+        if (balance > balanceFlow.value) mintedInvoice = null
         balanceFlow.value = balance
         healthFlow.value = HealthState.READY
 
@@ -536,6 +557,29 @@ class DelegateBackedLarkCore(
         if (!walletOpen) return
         runMaintenance()
         pollOnce()
+    }
+
+    /**
+     * The amount-carrying receive code: today's Ark URI, plus a Lightning destination when the
+     * holder has named an amount and the server minted an invoice for it.
+     *
+     * Thin on purpose. Which code to serve is [receiveCodeFor]'s decision, in `commonMain` where
+     * it can be tested; this method only supplies the three inputs and honours the seam's promise
+     * never to fail. Every failure — no URI yet, an unreachable server, an invoice that would
+     * break the URI — degrades to the code the wallet already had.
+     */
+    override suspend fun requestReceiveCode(sats: Long): String {
+        val arkUri = receiveCodeCache
+        // No URI or no amount means there is nothing to mint for, and no round trip worth making.
+        if (arkUri.isNullOrEmpty() || sats <= 0L) return receiveCodeFor(arkUri, sats, null)
+        return receiveCodeFor(arkUri, sats, invoiceFor(sats))
+    }
+
+    /** The invoice for [sats]: the one already minted for that amount, or a freshly minted one. */
+    private suspend fun invoiceFor(sats: Long): String? = mintMutex.withLock {
+        reusableInvoice(mintedInvoice, sats, nowEpochSeconds(), MINTED_INVOICE_REUSE_SECONDS)
+            ?: delegate.awaitValue { onResult -> mintBolt11Invoice(sats, onResult) }
+                ?.also { mintedInvoice = CachedInvoice(sats, it, nowEpochSeconds()) }
     }
 
     override suspend fun send(recipient: String, sats: Long): SendResult {

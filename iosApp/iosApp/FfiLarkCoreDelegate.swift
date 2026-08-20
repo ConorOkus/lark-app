@@ -177,6 +177,13 @@ final class FfiLarkCoreDelegate: LarkCoreDelegate {
         perform(onResult) { wallet in try await wallet.sendArk(address: address, sats: UInt64(sats)) }
     }
 
+    // Clamped rather than converted directly: a negative Int64 traps on the way into UInt64, and a
+    // crash is a worse answer than the crate's own refusal. Zero is what the crate rejects, so the
+    // clamp lands on a clean typed error instead of undefined behaviour.
+    func mintBolt11Invoice(sats: Int64, onResult: @escaping (String?, String?) -> Void) {
+        perform(onResult) { wallet in try await wallet.mintBolt11Invoice(sats: UInt64(max(0, sats))) }
+    }
+
     func boardAll(onResult: @escaping (String?, String?) -> Void) {
         perform(onResult) { wallet in try await wallet.boardAll() }
     }
