@@ -47,6 +47,14 @@ delegate seam can be broken while every test passes. `:composeApp:linkDebugFrame
 is the cheap check (seconds, and it does compile `iosMain`); `xcodebuild` is the complete one. This
 has bitten three times in one feature.
 
+**A fork commit that is not pushed passes every local check.** `scripts/clone-forks.sh` ends by
+*detaching HEAD* at the pinned SHA, so a commit made in the fork after running it sits on a detached
+HEAD while the branch stays where it was — and `git push <remote> <branch>` then pushes the unmoved
+branch, exits 0, and sends nothing. The pin, the local checkout and `build-rust.sh` all agree; CI
+clones fresh and dies with `fatal: unable to read tree`. `clone-forks.sh` now checks that the remote
+branch actually contains the pin (non-fatal when offline), but the habit is the real fix: after
+pushing a fork branch, confirm with `git ls-remote <repo> <branch>` rather than trusting exit 0.
+
 Two things that will bite a fresh checkout:
 
 - **The Rust core's XCFramework is a build artifact, not in the repo** (~216MB). The iOS app links

@@ -45,4 +45,8 @@ uniffi = { version = "0.28", features = ["bindgen-tests"] }
 # it here lets the contract suite hold the fork to a bounded connect, which is what stops a pin
 # bump from quietly restoring a wallet that never finishes opening. See ark_connect_timeout_tests.
 bark-server-rpc = { path = "../../../bark/server-rpc" }
+# Same reason: the CPFP economic ceiling that bounds what a unilateral exit will pay to fee-bump
+# lives in the fork, and losing it would restore a fee-burn exposure silently. See
+# cpfp_stake_ceiling_tests.
+bark-bitcoin-ext = { path = "../../../bark/bitcoin-ext" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }

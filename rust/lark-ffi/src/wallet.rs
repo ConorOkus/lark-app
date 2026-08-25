@@ -1329,3 +1329,59 @@ mod ark_connect_timeout_tests {
         assert!(started.elapsed() < BUDGET, "took {:?}", started.elapsed());
     }
 }
+
+/// A CPFP bid must be bounded by what it recovers.
+///
+/// Like [ark_connect_timeout_tests] above, this guards a fork bump rather than our own code — the
+/// ceiling lives in bark's shared CPFP builder — and it is here because the failure it prevents is
+/// ours to suffer. LARK's unilateral exit fee-bumps every transaction in the exit tree, and an
+/// exit-tree transaction is mostly other people's money: our stake is one leaf, the rest belongs to
+/// strangers' branches. Without a ceiling the wallet bids against the whole delivered value.
+///
+/// That is an attack surface, not only waste. P2A anchors are anyone-can-bump, so a third party can
+/// park a bulky, high-absolute-fee child on the anchor; the RBF branch then prices our replacement
+/// off whatever is standing there. The ceiling is what makes an overbidding rival burn their own
+/// funds instead of baiting ours.
+///
+/// Ported from gsanders87's `f1333628`, which flags it FOR UPSTREAM as independent of the channels
+/// work. If a later pin bump drops it, these stop compiling — `ExceedsStake` and the `stake`
+/// argument both disappear — and that is the point.
+#[cfg(test)]
+mod cpfp_stake_ceiling_tests {
+    use bitcoin::Amount;
+    use bitcoin_ext::bdk::{check_cpfp_fee_ceiling, cpfp_fee_ceiling, CpfpInternalError};
+
+    /// The variant every caller that has no scoped stake passes. It means "the whole delivered
+    /// value is ours" — never "no ceiling" — and reading it the other way is how the exposure
+    /// would come back without anyone editing the rule.
+    #[test]
+    fn an_absent_stake_still_bounds_the_bid_at_what_the_package_delivers() {
+        let ceiling = cpfp_fee_ceiling(None, Amount::from_sat(90_000));
+        assert_eq!(ceiling, Amount::from_sat(90_000));
+        assert!(check_cpfp_fee_ceiling(Amount::from_sat(90_001), ceiling).is_err());
+    }
+
+    /// LARK's shape: a 90,000 sat leaf inside a shared tree transaction that pays out far more.
+    /// The bid has to be bounded by our leaf, not by the tree.
+    #[test]
+    fn our_leaf_bounds_the_bid_not_the_whole_tree_transaction() {
+        let ceiling = cpfp_fee_ceiling(Some(Amount::from_sat(90_000)), Amount::from_sat(1_000_000));
+        assert_eq!(ceiling, Amount::from_sat(90_000));
+
+        match check_cpfp_fee_ceiling(Amount::from_sat(120_000), ceiling) {
+            Err(CpfpInternalError::ExceedsStake { fee, stake }) => {
+                assert_eq!(fee, Amount::from_sat(120_000));
+                assert_eq!(stake, Amount::from_sat(90_000));
+            },
+            other => panic!("a bid past our leaf must be refused, got {:?}", other),
+        }
+    }
+
+    /// The realistic exit fee — the proven drill paid 130 sat to claim 90,000 — must still clear
+    /// comfortably. A ceiling that refuses ordinary bumps would be worse than none.
+    #[test]
+    fn an_ordinary_exit_fee_is_nowhere_near_the_ceiling() {
+        let ceiling = cpfp_fee_ceiling(Some(Amount::from_sat(90_000)), Amount::from_sat(90_000));
+        assert!(check_cpfp_fee_ceiling(Amount::from_sat(130), ceiling).is_ok());
+    }
+}
