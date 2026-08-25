@@ -15,8 +15,8 @@
 # has advanced past this commit and no longer contains it. The captaind Fly
 # image (deploy/fly/captaind.Dockerfile) clones from this same remote.
 repo = "https://gitlab.com/ConorOkus/bark"
-branch = "fix/ldk-announce-address"
-sha = "5cd1f2261bbf45d9ddb5860ff60327100a673d92"
+branch = "fix/cpfp-stake-ceiling"
+sha = "3bf215ef65a509c8ec11345306f4b7cd7b43493b"
 
 [rust-lightning]
 repo = "https://github.com/instagibbs/rust-lightning"
