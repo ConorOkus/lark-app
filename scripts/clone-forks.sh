@@ -57,6 +57,30 @@ clone_fork() {
     # Already have the pinned commit; nothing to fetch. This also covers a developer checkout
     # whose `origin` is a different fork remote than the pin names.
     echo "==> $name already has the pinned commit"
+
+    # ...but "I have it" is not "the remote has it", and this is the one branch where those can
+    # differ. CI clones fresh, so a pin naming a commit that only ever existed on this disk passes
+    # every local check and fails the runner with an unreadable tree.
+    #
+    # That is not hypothetical: this script ends by DETACHING HEAD at the pin, so a commit made
+    # afterwards sits on a detached HEAD while the branch stays put — and `git push <remote>
+    # <branch>` then pushes the unmoved branch, reports success, and sends nothing.
+    #
+    # Non-fatal, because working offline is legitimate and this is the only step that needs the
+    # network when the checkout is already correct.
+    if remote_head="$(git ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)" && [ -n "$remote_head" ]; then
+      if ! git -C "$dir" cat-file -e "${remote_head}^{commit}" 2>/dev/null ||
+         ! git -C "$dir" merge-base --is-ancestor "$sha" "$remote_head" 2>/dev/null; then
+        echo "ERROR: $repo $branch is at ${remote_head:0:12}, which does not contain the pinned" >&2
+        echo "       $sha." >&2
+        echo "       The pin names a commit the remote does not have. CI clones fresh and will" >&2
+        echo "       fail. Push the fork branch before bumping the pin — and check you are not on" >&2
+        echo "       a detached HEAD, which makes 'git push <remote> <branch>' a silent no-op." >&2
+        exit 1
+      fi
+    else
+      echo "==> (could not reach $repo to confirm the pin is pushed; skipping that check)"
+    fi
   else
     # Fetch from the pinned URL explicitly, never from whatever `origin` happens to be: a local
     # checkout may point at a different fork remote that does not carry this branch.
