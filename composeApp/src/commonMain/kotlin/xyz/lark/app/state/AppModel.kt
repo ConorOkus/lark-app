@@ -176,6 +176,11 @@ data class ReceiveModel(
      * looks identical to one that does not.
      */
     val requestedAmount: String? = null,
+    /**
+     * True while a hand-asked retry is in flight, so the retry affordance can go quiet instead of
+     * queueing a second poll behind the first. Only meaningful when [code] is null.
+     */
+    val retrying: Boolean = false,
 )
 
 /**

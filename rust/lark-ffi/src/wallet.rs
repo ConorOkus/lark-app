@@ -309,6 +309,30 @@ impl LarkWallet {
         })
     }
 
+    /// Mint a BOLT11 invoice for `sats`, payable from any Lightning wallet (the
+    /// receive counterpart to [`Self::send_bolt11`]).
+    ///
+    /// The Ark server takes the incoming HTLC and hands the value over as VTXOs,
+    /// so this needs no channel of our own and no inbound liquidity — and no
+    /// balance at all, which is what lets a wallet holding nothing be funded
+    /// this way. Claiming is not done here: it happens in the maintenance pass
+    /// [`Self::refresh`] already runs.
+    ///
+    /// A zero amount is refused locally rather than asked about — the server has
+    /// nothing useful to say about an invoice for nothing, and the round trip
+    /// would leave a pending receive behind.
+    pub async fn mint_bolt11_invoice(&self, sats: u64) -> Result<String, LarkError> {
+        if sats == 0 {
+            return Err(LarkError::Invalid { msg: "amount must be positive".into() });
+        }
+        let invoice = self
+            .inner
+            .bolt11_invoice(Amount::from_sat(sats))
+            .await
+            .map_err(LarkError::from)?;
+        Ok(invoice.to_string())
+    }
+
     /// Pay a BOLT11 invoice over Lightning (the seam's `send` for a bolt11
     /// recipient). Pass `sats = 0` for an amount-carrying invoice; a positive
     /// `sats` sets the amount for an amountless invoice. Returns a short summary.

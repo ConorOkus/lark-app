@@ -24,8 +24,12 @@ private val TitleBottomPadding = 8.dp
 private val SubCopyMaxWidth = 300.dp
 private val CardsTopGap = 32.dp
 
+// Names both routes because the screen now leads with the fast one: the old blanket "first
+// deposit takes a few minutes" was written when moving bitcoin in was the only way, and reads as
+// a warning about the whole screen rather than about one card on it.
 private const val SUB_COPY =
-    "First deposit takes a few minutes to settle. Everything after that is instant."
+    "Getting paid over Lightning arrives in seconds. Moving bitcoin in from another wallet " +
+        "takes a few minutes to settle."
 
 /**
  * Onboarding 3 — add money (spec block `data-screen-label="Onboarding — add money"`):
@@ -40,6 +44,11 @@ private const val SUB_COPY =
 @Composable
 fun FundScreen(
     onBack: () -> Unit,
+    /**
+     * Being paid over Lightning. Never null: every core can answer with a receive code, and one
+     * that cannot reach a server degrades to the code it already had rather than to no route.
+     */
+    onGetPaidOverLightning: () -> Unit,
     /** Null for a core with no on-chain wallet, which hides the card rather than faking a route. */
     onMoveBitcoinIn: (() -> Unit)?,
     onLater: () -> Unit,
@@ -69,13 +78,22 @@ fun FundScreen(
             modifier = Modifier.widthIn(max = SubCopyMaxWidth),
         )
         Spacer(modifier = Modifier.height(CardsTopGap))
+        // First because it is the route that works for someone holding no bitcoin yet — which is
+        // most people opening this screen, and the only ones for whom the other card is a wall.
+        OptionCard(
+            title = "Get paid over Lightning",
+            subtitle = "Ask someone to send you bitcoin",
+            icon = LarkIcons.Bolt,
+            onClick = onGetPaidOverLightning,
+            iconTint = LarkColors.Gold,
+        )
         if (onMoveBitcoinIn != null) {
             OptionCard(
                 title = "Move bitcoin in",
                 subtitle = "From another wallet or exchange",
                 icon = LarkIcons.ArrowUp,
                 onClick = onMoveBitcoinIn,
-                iconTint = LarkColors.Gold,
+                iconTint = LarkColors.TextSecondary,
             )
         }
         Spacer(modifier = Modifier.weight(1f))

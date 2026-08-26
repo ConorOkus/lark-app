@@ -122,6 +122,26 @@ class FfiHostLibraryTest {
                         runCatching { wallet.reconnectArk() }.isFailure,
                         "reconnect_ark must not report success without a reachable Ark server",
                     )
+
+                    // Minting an invoice is the receive counterpart to mint_address, and just as
+                    // much a captaind round trip: the server is what stands behind the HTLC. A
+                    // success here would mean handing out a Lightning destination no server ever
+                    // agreed to pay.
+                    assertTrue(
+                        runCatching { wallet.mintBolt11Invoice(MINT_SATS) }.isFailure,
+                        "mint_bolt11_invoice must not appear to succeed without an Ark server",
+                    )
+
+                    // The zero guard is local, which is the part worth pinning: it must refuse
+                    // before the round trip rather than inheriting the connection failure above.
+                    // Asserted on the reason because both paths fail here — only the reason
+                    // distinguishes a guard that ran from one that never got the chance.
+                    val zero = runCatching { wallet.mintBolt11Invoice(0uL) }.exceptionOrNull()
+                    assertTrue(
+                        zero is uniffi.lark_ffi.LarkException &&
+                            zero.message?.contains("positive") == true,
+                        "a zero amount is refused locally, not by the server; got: $zero",
+                    )
                 }
             }
         }
@@ -316,6 +336,9 @@ class FfiHostLibraryTest {
         const val MNEMONIC_WORDS = 12
 
         /** Reserved-for-documentation host on a closed port: guaranteed never to answer. */
+        /** Any positive amount; the lane cares that the mint needs a server, not what it asks for. */
+        const val MINT_SATS: ULong = 5_000uL
+
         const val UNREACHABLE_ARK_SERVER = "http://192.0.2.1:1"
 
         /** Signet/mutinynet taproot addresses are bech32m under this HRP. */

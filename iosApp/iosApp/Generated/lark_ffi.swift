@@ -627,6 +627,22 @@ public protocol LarkWalletProtocol : AnyObject {
     func mintAddress() async throws  -> String
     
     /**
+     * Mint a BOLT11 invoice for `sats`, payable from any Lightning wallet (the
+     * receive counterpart to [`Self::send_bolt11`]).
+     *
+     * The Ark server takes the incoming HTLC and hands the value over as VTXOs,
+     * so this needs no channel of our own and no inbound liquidity — and no
+     * balance at all, which is what lets a wallet holding nothing be funded
+     * this way. Claiming is not done here: it happens in the maintenance pass
+     * [`Self::refresh`] already runs.
+     *
+     * A zero amount is refused locally rather than asked about — the server has
+     * nothing useful to say about an invoice for nothing, and the round trip
+     * would leave a pending receive behind.
+     */
+    func mintBolt11Invoice(sats: UInt64) async throws  -> String
+    
+    /**
      * Wallet movements, newest-first is up to the caller (the seam's `activity`).
      *
      * Reads `history()` rather than the deprecated `movements()`, and carries the counterparty
@@ -1068,6 +1084,37 @@ open func mintAddress()async throws  -> String {
                 uniffi_lark_ffi_fn_method_larkwallet_mint_address(
                     self.uniffiClonePointer()
                     
+                )
+            },
+            pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_lark_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_lark_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeLarkError.lift
+        )
+}
+    
+    /**
+     * Mint a BOLT11 invoice for `sats`, payable from any Lightning wallet (the
+     * receive counterpart to [`Self::send_bolt11`]).
+     *
+     * The Ark server takes the incoming HTLC and hands the value over as VTXOs,
+     * so this needs no channel of our own and no inbound liquidity — and no
+     * balance at all, which is what lets a wallet holding nothing be funded
+     * this way. Claiming is not done here: it happens in the maintenance pass
+     * [`Self::refresh`] already runs.
+     *
+     * A zero amount is refused locally rather than asked about — the server has
+     * nothing useful to say about an invoice for nothing, and the round trip
+     * would leave a pending receive behind.
+     */
+open func mintBolt11Invoice(sats: UInt64)async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_lark_ffi_fn_method_larkwallet_mint_bolt11_invoice(
+                    self.uniffiClonePointer(),
+                    FfiConverterUInt64.lower(sats)
                 )
             },
             pollFunc: ffi_lark_ffi_rust_future_poll_rust_buffer,
@@ -2876,6 +2923,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_mint_address() != 18162) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_lark_ffi_checksum_method_larkwallet_mint_bolt11_invoice() != 1212) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_lark_ffi_checksum_method_larkwallet_movements() != 12690) {

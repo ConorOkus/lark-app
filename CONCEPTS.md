@@ -16,6 +16,13 @@ A board is an on-chain transaction and pays a miner fee out of the very coins it
 
 Confirmation is necessary but not sufficient for the funds to become spendable: a confirmed board also has to be **registered** by the wallet, which happens during its periodic upkeep rather than on a balance read. A wallet that only reads its balance can hold a confirmed board indefinitely without ever showing it.
 
+### Server-bridged Lightning receive
+Being paid over Lightning by having the Ark server take the incoming HTLC and hand the value over as VTXOs. The wallet mints an invoice the server stands behind, and the wallet's own upkeep pass claims the result; bark calls this offchain boarding, because it is a way of acquiring a balance rather than a way of spending one.
+
+Distinct from paying and being paid over a [Channel](#channel), which is the same outcome reached without the server in the path. The two differ in what they require rather than in what the holder sees: a channel receive needs inbound capacity the wallet had to acquire, while a server-bridged receive needs only a reachable server — which is why it is the only one of the two available to a wallet with no funds at all.
+
+Its availability is a property of the server's configuration, not of the protocol. A server that demands proof of an existing VTXO before preparing a claim cannot serve an empty wallet, and the claim path carries no way to satisfy that demand by other means.
+
 ### Exiting
 The state a wallet is in while it leaves the Ark unilaterally — a property of the wallet, not a screen it happens to be showing. An exiting wallet accepts no sends or receives, keeps its funding intent disarmed, and resumes its progress on every app open until every VTXO has been claimed on-chain.
 
